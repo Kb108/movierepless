@@ -2,7 +2,14 @@ import os
 import sqlite3
 import html
 import logging
-from telegram import Update, BotCommand, MenuButtonCommands
+
+from telegram import (
+    Update,
+    BotCommand,
+    MenuButtonCommands,
+    ReplyKeyboardRemove,
+)
+
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -10,6 +17,7 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
+
 
 # =========================================================
 # CONFIG
@@ -28,11 +36,16 @@ try:
     ADMIN_ID = int(ADMIN_ID)
 except ValueError:
     raise ValueError(
-        "ADMIN_ID must be a numeric Telegram User ID. "
-        "Example: 123456789"
+        "ADMIN_ID must be a numeric Telegram User ID."
     )
 
+
 DB_FILE = "bot.db"
+
+
+# =========================================================
+# LOGGING
+# =========================================================
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -53,9 +66,11 @@ def get_db():
 
 
 def init_db():
+
     conn = get_db()
     cur = conn.cursor()
 
+    # Source Channels
     cur.execute("""
         CREATE TABLE IF NOT EXISTS channels (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -63,6 +78,7 @@ def init_db():
         )
     """)
 
+    # Settings
     cur.execute("""
         CREATE TABLE IF NOT EXISTS settings (
             id INTEGER PRIMARY KEY,
@@ -71,6 +87,7 @@ def init_db():
         )
     """)
 
+    # Default settings
     cur.execute("""
         INSERT OR IGNORE INTO settings
         (id, replace_text, footer)
@@ -95,6 +112,7 @@ Best loot offers 🛍️ 🤝 💸
 # =========================================================
 
 def is_admin(update: Update):
+
     if not update.effective_user:
         return False
 
@@ -102,25 +120,33 @@ def is_admin(update: Update):
 
 
 async def admin_only(update: Update):
+
     if not is_admin(update):
+
         if update.message:
             await update.message.reply_text(
-                "❌ You are not authorized to use this bot."
+                "❌ You are not authorized to use this bot.",
+                reply_markup=ReplyKeyboardRemove()
             )
+
         return False
 
     return True
 
 
 # =========================================================
-# SETTINGS
+# CHANNEL FUNCTIONS
 # =========================================================
 
 def get_channels():
+
     conn = get_db()
     cur = conn.cursor()
 
-    cur.execute("SELECT channel FROM channels ORDER BY id ASC")
+    cur.execute(
+        "SELECT channel FROM channels ORDER BY id ASC"
+    )
+
     rows = cur.fetchall()
 
     conn.close()
@@ -129,17 +155,23 @@ def get_channels():
 
 
 def add_channel(channel):
+
     conn = get_db()
     cur = conn.cursor()
 
     try:
+
         cur.execute(
             "INSERT INTO channels (channel) VALUES (?)",
             (channel,)
         )
+
         conn.commit()
+
         result = True
+
     except sqlite3.IntegrityError:
+
         result = False
 
     conn.close()
@@ -148,6 +180,7 @@ def add_channel(channel):
 
 
 def remove_channel(channel):
+
     conn = get_db()
     cur = conn.cursor()
 
@@ -164,7 +197,12 @@ def remove_channel(channel):
     return deleted
 
 
+# =========================================================
+# SETTINGS FUNCTIONS
+# =========================================================
+
 def get_settings():
+
     conn = get_db()
     cur = conn.cursor()
 
@@ -181,10 +219,14 @@ def get_settings():
     if not row:
         return "", ""
 
-    return row["replace_text"], row["footer"]
+    return (
+        row["replace_text"],
+        row["footer"]
+    )
 
 
 def set_replace_text(text):
+
     conn = get_db()
     cur = conn.cursor()
 
@@ -199,6 +241,7 @@ def set_replace_text(text):
 
 
 def set_footer(text):
+
     conn = get_db()
     cur = conn.cursor()
 
@@ -213,85 +256,137 @@ def set_footer(text):
 
 
 # =========================================================
-# TEXT FORMATTER
+# REMOVE OLD KEYBOARD
+# =========================================================
+
+async def remove_old_keyboard(update: Update):
+
+    if not update.message:
+        return
+
+    try:
+
+        await update.message.reply_text(
+            "✅ Keyboard removed.\n\n"
+            "Use the Telegram Menu (☰) for bot commands.",
+            reply_markup=ReplyKeyboardRemove()
+        )
+
+    except Exception as e:
+
+        logger.error(
+            "Keyboard removal error: %s",
+            e
+        )
+
+
+# =========================================================
+# BOLD FORMAT
 # =========================================================
 
 def make_bold(text):
-    """
-    Makes the complete text bold.
-    HTML characters are escaped first.
-    """
 
     if not text:
         return ""
 
+    # Escape HTML characters
     escaped = html.escape(text)
 
+    # Make everything bold
     return f"<b>{escaped}</b>"
 
 
-def format_post(text):
-    """
-    Processes incoming movie text/caption.
+# =========================================================
+# FORMAT MOVIE POST
+# =========================================================
 
-    1. Optional replacement text
-    2. Adds footer
-    3. Makes everything bold
-    """
+def format_post(text):
 
     replace_text, footer = get_settings()
 
     text = text or ""
 
+    # -----------------------------------------------------
     # Replace configured text
+    # -----------------------------------------------------
+
     if replace_text.strip():
+
         channels = get_channels()
 
         if channels:
-            # Use first configured source channel
-            source_channel = channels[0]
+
+            first_channel = channels[0]
 
             text = text.replace(
                 replace_text,
-                source_channel
+                first_channel
             )
 
-    # Add footer
+    # -----------------------------------------------------
+    # Footer
+    # -----------------------------------------------------
+
     if footer.strip():
+
         if text.strip():
-            text = text.rstrip() + "\n\n" + footer.strip()
+
+            text = (
+                text.rstrip()
+                + "\n\n"
+                + footer.strip()
+            )
+
         else:
+
             text = footer.strip()
 
-    # Everything bold
+    # -----------------------------------------------------
+    # Everything Bold
+    # -----------------------------------------------------
+
     return make_bold(text)
 
 
 # =========================================================
-# SEND TO ALL CHANNELS
+# SEND TO ALL SOURCE CHANNELS
 # =========================================================
 
-async def send_to_all_channels(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def send_to_all_channels(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
     message = update.message
 
     if not message:
         return
 
+    # Only Admin can send content to Source Channels
+    if not is_admin(update):
+        return
+
     channels = get_channels()
 
     if not channels:
-        if is_admin(update):
-            await message.reply_text(
-                "⚠️ No Source Channel has been added yet.\n\n"
-                "Use /addchannel"
-            )
+
+        await message.reply_text(
+            "⚠️ No Source Channel added yet.\n\n"
+            "Use the Telegram Menu → Add Source Channel",
+            reply_markup=ReplyKeyboardRemove()
+        )
+
         return
 
     # -----------------------------------------------------
-    # Get text/caption
+    # Get Text / Caption
     # -----------------------------------------------------
 
-    original_text = message.text or message.caption or ""
+    original_text = (
+        message.text
+        or message.caption
+        or ""
+    )
 
     formatted_text = format_post(original_text)
 
@@ -309,10 +404,15 @@ async def send_to_all_channels(update: Update, context: ContextTypes.DEFAULT_TYP
         for channel in channels:
 
             try:
+
                 await context.bot.send_photo(
                     chat_id=channel,
                     photo=photo.file_id,
-                    caption=formatted_text[:1024] if formatted_text else None,
+                    caption=(
+                        formatted_text[:1024]
+                        if formatted_text
+                        else None
+                    ),
                     parse_mode="HTML"
                 )
 
@@ -339,10 +439,15 @@ async def send_to_all_channels(update: Update, context: ContextTypes.DEFAULT_TYP
         for channel in channels:
 
             try:
+
                 await context.bot.send_video(
                     chat_id=channel,
                     video=video.file_id,
-                    caption=formatted_text[:1024] if formatted_text else None,
+                    caption=(
+                        formatted_text[:1024]
+                        if formatted_text
+                        else None
+                    ),
                     parse_mode="HTML"
                 )
 
@@ -369,10 +474,15 @@ async def send_to_all_channels(update: Update, context: ContextTypes.DEFAULT_TYP
         for channel in channels:
 
             try:
+
                 await context.bot.send_document(
                     chat_id=channel,
                     document=document.file_id,
-                    caption=formatted_text[:1024] if formatted_text else None,
+                    caption=(
+                        formatted_text[:1024]
+                        if formatted_text
+                        else None
+                    ),
                     parse_mode="HTML"
                 )
 
@@ -399,10 +509,15 @@ async def send_to_all_channels(update: Update, context: ContextTypes.DEFAULT_TYP
         for channel in channels:
 
             try:
+
                 await context.bot.send_audio(
                     chat_id=channel,
                     audio=audio.file_id,
-                    caption=formatted_text[:1024] if formatted_text else None,
+                    caption=(
+                        formatted_text[:1024]
+                        if formatted_text
+                        else None
+                    ),
                     parse_mode="HTML"
                 )
 
@@ -429,10 +544,15 @@ async def send_to_all_channels(update: Update, context: ContextTypes.DEFAULT_TYP
         for channel in channels:
 
             try:
+
                 await context.bot.send_voice(
                     chat_id=channel,
                     voice=voice.file_id,
-                    caption=formatted_text[:1024] if formatted_text else None,
+                    caption=(
+                        formatted_text[:1024]
+                        if formatted_text
+                        else None
+                    ),
                     parse_mode="HTML"
                 )
 
@@ -460,6 +580,7 @@ async def send_to_all_channels(update: Update, context: ContextTypes.DEFAULT_TYP
         for channel in channels:
 
             try:
+
                 await context.bot.send_message(
                     chat_id=channel,
                     text=formatted_text,
@@ -480,7 +601,7 @@ async def send_to_all_channels(update: Update, context: ContextTypes.DEFAULT_TYP
                 )
 
     # =====================================================
-    # OTHER MEDIA
+    # OTHER CONTENT
     # =====================================================
 
     else:
@@ -488,6 +609,7 @@ async def send_to_all_channels(update: Update, context: ContextTypes.DEFAULT_TYP
         for channel in channels:
 
             try:
+
                 await context.bot.copy_message(
                     chat_id=channel,
                     from_chat_id=message.chat_id,
@@ -507,43 +629,47 @@ async def send_to_all_channels(update: Update, context: ContextTypes.DEFAULT_TYP
                 )
 
     # =====================================================
-    # ADMIN RESULT
+    # RESULT
     # =====================================================
 
-    if is_admin(update):
-
-        result = (
-            "✅ Post processed successfully.\n\n"
-            f"📤 Sent: {success}\n"
-            f"❌ Failed: {failed}"
-        )
-
-        await message.reply_text(result)
-
-
-# =========================================================
-# /START
-# =========================================================
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    if not await admin_only(update):
-        return
-
-    await update.message.reply_text(
-        "🎬 Movie Update HD Bot\n\n"
-        "Send any movie post, text, photo, video or document here.\n\n"
-        "The bot will process it and send it to all configured "
-        "Source Channels.\n\n"
-        "Use the Telegram Menu for commands."
+    await message.reply_text(
+        "✅ Movie post processed.\n\n"
+        f"📤 Sent: {success}\n"
+        f"❌ Failed: {failed}",
+        reply_markup=ReplyKeyboardRemove()
     )
 
 
 # =========================================================
-# /HELP
+# START
 # =========================================================
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    if not await admin_only(update):
+        return
+
+    # Remove any old Reply Keyboard
+    await update.message.reply_text(
+        "🎬 Movie Update HD Bot\n\n"
+        "✅ Old keyboard removed.\n\n"
+        "Send your movie post here.\n\n"
+        "Use the Telegram Menu (☰) for commands.",
+        reply_markup=ReplyKeyboardRemove()
+    )
+
+
+# =========================================================
+# HELP
+# =========================================================
+
+async def help_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
     if not await admin_only(update):
         return
@@ -551,23 +677,29 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📚 Bot Commands\n\n"
 
+        "/start - Start Bot\n"
+        "/help - Help\n"
         "/addchannel - Add Source Channel\n"
         "/channels - Show Source Channels\n"
-        "/removechannel - Remove Source Channel\n\n"
-
-        "/setreplace - Set text replacement\n"
+        "/removechannel - Remove Source Channel\n"
+        "/setreplace - Set replacement text\n"
         "/setfooter - Set footer\n"
-        "/settings - Show current settings\n\n"
+        "/settings - Show settings\n\n"
 
-        "You can also simply send a movie post here."
+        "No Reply Keyboard is used.\n"
+        "All commands are available from Telegram Menu.",
+        reply_markup=ReplyKeyboardRemove()
     )
 
 
 # =========================================================
-# /ADDCHANNEL
+# ADD CHANNEL
 # =========================================================
 
-async def addchannel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def addchannel_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
     if not await admin_only(update):
         return
@@ -576,21 +708,35 @@ async def addchannel_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         await update.message.reply_text(
             "➕ Add Source Channel\n\n"
+
             "Use:\n"
             "/addchannel @yourchannel\n\n"
+
             "Example:\n"
-            "/addchannel @MovieSourceHD"
+            "/addchannel @MovieSourceHD\n\n"
+
+            "First make sure the bot is Admin in that channel.",
+            reply_markup=ReplyKeyboardRemove()
         )
 
         return
 
     channel = context.args[0].strip()
 
-    if not channel.startswith("@") and not channel.startswith("-100"):
+    if (
+        not channel.startswith("@")
+        and not channel.startswith("-100")
+    ):
+
         await update.message.reply_text(
             "❌ Invalid channel format.\n\n"
-            "Use @channelusername or -100xxxxxxxxxx"
+            "Use:\n"
+            "@channelusername\n\n"
+            "or\n\n"
+            "-100xxxxxxxxxx",
+            reply_markup=ReplyKeyboardRemove()
         )
+
         return
 
     added = add_channel(channel)
@@ -598,23 +744,29 @@ async def addchannel_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if added:
 
         await update.message.reply_text(
-            f"✅ Source Channel added:\n{channel}\n\n"
-            "Make sure the bot is an Administrator in that channel "
-            "with Post Messages permission."
+            f"✅ Source Channel added:\n\n"
+            f"{channel}\n\n"
+            "Make sure the bot is Administrator "
+            "with Post Messages permission.",
+            reply_markup=ReplyKeyboardRemove()
         )
 
     else:
 
         await update.message.reply_text(
-            f"⚠️ This channel is already added:\n{channel}"
+            f"⚠️ Already added:\n\n{channel}",
+            reply_markup=ReplyKeyboardRemove()
         )
 
 
 # =========================================================
-# /CHANNELS
+# CHANNEL LIST
 # =========================================================
 
-async def channels_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def channels_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
     if not await admin_only(update):
         return
@@ -624,22 +776,29 @@ async def channels_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not channels:
 
         await update.message.reply_text(
-            "📭 No Source Channels added."
+            "📭 No Source Channels added.",
+            reply_markup=ReplyKeyboardRemove()
         )
 
         return
 
     text = "📢 Source Channels\n\n"
 
-    for index, channel in enumerate(channels, start=1):
+    for index, channel in enumerate(
+        channels,
+        start=1
+    ):
 
         text += f"{index}. {channel}\n"
 
-    await update.message.reply_text(text)
+    await update.message.reply_text(
+        text,
+        reply_markup=ReplyKeyboardRemove()
+    )
 
 
 # =========================================================
-# /REMOVECHANNEL
+# REMOVE CHANNEL
 # =========================================================
 
 async def removechannel_command(
@@ -655,7 +814,8 @@ async def removechannel_command(
         await update.message.reply_text(
             "🗑 Remove Source Channel\n\n"
             "Use:\n"
-            "/removechannel @yourchannel"
+            "/removechannel @yourchannel",
+            reply_markup=ReplyKeyboardRemove()
         )
 
         return
@@ -667,18 +827,20 @@ async def removechannel_command(
     if removed:
 
         await update.message.reply_text(
-            f"✅ Removed:\n{channel}"
+            f"✅ Removed:\n\n{channel}",
+            reply_markup=ReplyKeyboardRemove()
         )
 
     else:
 
         await update.message.reply_text(
-            f"❌ Channel not found:\n{channel}"
+            f"❌ Channel not found:\n\n{channel}",
+            reply_markup=ReplyKeyboardRemove()
         )
 
 
 # =========================================================
-# /SETREPLACE
+# SET REPLACE
 # =========================================================
 
 async def setreplace_command(
@@ -693,10 +855,16 @@ async def setreplace_command(
 
         await update.message.reply_text(
             "✏️ Set Replace Text\n\n"
+
             "Use:\n"
             "/setreplace @OldChannel\n\n"
+
             "Example:\n"
-            "/setreplace @OldMovieChannel"
+            "/setreplace @OldMovieChannel\n\n"
+
+            "The configured text will be replaced "
+            "with the first Source Channel.",
+            reply_markup=ReplyKeyboardRemove()
         )
 
         return
@@ -707,13 +875,13 @@ async def setreplace_command(
 
     await update.message.reply_text(
         "✅ Replacement text saved.\n\n"
-        f"Old text:\n{text}\n\n"
-        "It will be replaced with the first Source Channel."
+        f"Text:\n{text}",
+        reply_markup=ReplyKeyboardRemove()
     )
 
 
 # =========================================================
-# /SETFOOTER
+# SET FOOTER
 # =========================================================
 
 async def setfooter_command(
@@ -728,8 +896,10 @@ async def setfooter_command(
 
         await update.message.reply_text(
             "✏️ Set Footer\n\n"
+
             "Use:\n"
-            "/setfooter Your footer text here"
+            "/setfooter Your footer text here",
+            reply_markup=ReplyKeyboardRemove()
         )
 
         return
@@ -739,12 +909,13 @@ async def setfooter_command(
     set_footer(footer)
 
     await update.message.reply_text(
-        "✅ Footer updated successfully."
+        "✅ Footer updated successfully.",
+        reply_markup=ReplyKeyboardRemove()
     )
 
 
 # =========================================================
-# /SETTINGS
+# SETTINGS
 # =========================================================
 
 async def settings_command(
@@ -756,9 +927,16 @@ async def settings_command(
         return
 
     replace_text, footer = get_settings()
+
     channels = get_channels()
 
-    channel_text = "\n".join(channels) if channels else "None"
+    if channels:
+
+        channel_text = "\n".join(channels)
+
+    else:
+
+        channel_text = "None"
 
     await update.message.reply_text(
         "⚙️ Current Settings\n\n"
@@ -770,7 +948,8 @@ async def settings_command(
         f"{replace_text or 'None'}\n\n"
 
         "📝 Footer:\n"
-        f"{footer or 'None'}"
+        f"{footer or 'None'}",
+        reply_markup=ReplyKeyboardRemove()
     )
 
 
@@ -778,7 +957,10 @@ async def settings_command(
 # ERROR HANDLER
 # =========================================================
 
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+async def error_handler(
+    update: object,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
     logger.error(
         "Exception while handling update:",
@@ -787,25 +969,62 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =========================================================
-# SET BOT MENU
+# TELEGRAM MENU
 # =========================================================
 
-async def setup_bot(application: Application):
+async def setup_bot(
+    application: Application
+):
 
     commands = [
-        BotCommand("start", "Start the bot"),
-        BotCommand("help", "Help"),
-        BotCommand("addchannel", "Add Source Channel"),
-        BotCommand("channels", "Show Source Channels"),
-        BotCommand("removechannel", "Remove Source Channel"),
-        BotCommand("setreplace", "Set text replacement"),
-        BotCommand("setfooter", "Set footer"),
-        BotCommand("settings", "Show settings"),
+
+        BotCommand(
+            "start",
+            "Start the bot"
+        ),
+
+        BotCommand(
+            "help",
+            "Help"
+        ),
+
+        BotCommand(
+            "addchannel",
+            "Add Source Channel"
+        ),
+
+        BotCommand(
+            "channels",
+            "Show Source Channels"
+        ),
+
+        BotCommand(
+            "removechannel",
+            "Remove Source Channel"
+        ),
+
+        BotCommand(
+            "setreplace",
+            "Set replacement text"
+        ),
+
+        BotCommand(
+            "setfooter",
+            "Set footer"
+        ),
+
+        BotCommand(
+            "settings",
+            "Show settings"
+        ),
     ]
 
-    await application.bot.set_my_commands(commands)
+    # Telegram command menu
+    await application.bot.set_my_commands(
+        commands
+    )
 
-    # Telegram native Menu button
+    # Native Telegram Menu Button
     await application.bot.set_chat_menu_button(
         menu_button=MenuButtonCommands()
     )
@@ -817,8 +1036,10 @@ async def setup_bot(application: Application):
 
 def main():
 
+    # Initialize database
     init_db()
 
+    # Build application
     application = (
         Application.builder()
         .token(BOT_TOKEN)
@@ -826,51 +1047,79 @@ def main():
         .build()
     )
 
-    # Commands
+    # -----------------------------------------------------
+    # COMMANDS
+    # -----------------------------------------------------
+
     application.add_handler(
-        CommandHandler("start", start)
+        CommandHandler(
+            "start",
+            start
+        )
     )
 
     application.add_handler(
-        CommandHandler("help", help_command)
+        CommandHandler(
+            "help",
+            help_command
+        )
     )
 
     application.add_handler(
-        CommandHandler("addchannel", addchannel_command)
+        CommandHandler(
+            "addchannel",
+            addchannel_command
+        )
     )
 
     application.add_handler(
-        CommandHandler("channels", channels_command)
+        CommandHandler(
+            "channels",
+            channels_command
+        )
     )
 
     application.add_handler(
-        CommandHandler("removechannel", removechannel_command)
+        CommandHandler(
+            "removechannel",
+            removechannel_command
+        )
     )
 
     application.add_handler(
-        CommandHandler("setreplace", setreplace_command)
+        CommandHandler(
+            "setreplace",
+            setreplace_command
+        )
     )
 
     application.add_handler(
-        CommandHandler("setfooter", setfooter_command)
+        CommandHandler(
+            "setfooter",
+            setfooter_command
+        )
     )
 
     application.add_handler(
-        CommandHandler("settings", settings_command)
+        CommandHandler(
+            "settings",
+            settings_command
+        )
     )
 
-    # =====================================================
-    # ALL CONTENT
+    # -----------------------------------------------------
+    # ALL NORMAL CONTENT
     #
-    # This handles:
     # Text
     # Photo
     # Video
     # Document
     # Audio
     # Voice
-    # Forwarded messages
-    # =====================================================
+    # Forwarded Content
+    #
+    # No Reply Keyboard
+    # -----------------------------------------------------
 
     application.add_handler(
         MessageHandler(
@@ -879,14 +1128,40 @@ def main():
         )
     )
 
-    application.add_error_handler(error_handler)
+    # Error handler
+    application.add_error_handler(
+        error_handler
+    )
 
-    print("Movie Update HD Bot is running...")
+    print(
+        "===================================="
+    )
 
+    print(
+        "Movie Update HD Bot is running..."
+    )
+
+    print(
+        "Reply Keyboard: DISABLED"
+    )
+
+    print(
+        "Telegram Menu: ENABLED"
+    )
+
+    print(
+        "===================================="
+    )
+
+    # Start polling
     application.run_polling(
         allowed_updates=Update.ALL_TYPES
     )
 
+
+# =========================================================
+# RUN
+# =========================================================
 
 if __name__ == "__main__":
     main()
