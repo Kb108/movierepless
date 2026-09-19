@@ -97,10 +97,11 @@ def get_settings():
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT source_url,
-               footer,
-               watermark,
-               watermark_enabled
+        SELECT
+            source_url,
+            footer,
+            watermark,
+            watermark_enabled
         FROM settings
         WHERE id = 1
     """)
@@ -210,6 +211,7 @@ def add_channel(channel):
         )
 
         conn.commit()
+
         result = True
 
     except sqlite3.IntegrityError:
@@ -240,7 +242,7 @@ def remove_channel(channel):
 
 
 # =========================================================
-# ADMIN
+# ADMIN CHECK
 # =========================================================
 
 def is_admin(update):
@@ -282,7 +284,7 @@ async def send_bold_message(message, text):
 
 
 # =========================================================
-# TELEGRAM USERNAME + URL REPLACEMENT
+# TELEGRAM URL + USERNAME REPLACEMENT
 # =========================================================
 
 def replace_telegram_links(text):
@@ -298,12 +300,11 @@ def replace_telegram_links(text):
         return text
 
     # -----------------------------------------------------
-    # Get source username from:
+    # Extract source username
     #
     # https://t.me/MovieUpdateHD
     #
-    # Result:
-    # MovieUpdateHD
+    # -> MovieUpdateHD
     # -----------------------------------------------------
 
     match = re.match(
@@ -318,15 +319,7 @@ def replace_telegram_links(text):
     source_username = match.group(1)
 
     # -----------------------------------------------------
-    # STEP 1
-    #
-    # Replace Telegram URL with Telegram URL
-    #
-    # https://t.me/OldChannel
-    # ->
-    # https://t.me/MovieUpdateHD
-    #
-    # Other URLs are untouched.
+    # Telegram URL -> Telegram URL
     # -----------------------------------------------------
 
     text = re.sub(
@@ -337,14 +330,11 @@ def replace_telegram_links(text):
     )
 
     # -----------------------------------------------------
-    # STEP 2
-    #
-    # Replace @username with @username
+    # Telegram username -> Telegram username
     #
     # @OldChannel
     # ->
     # @MovieUpdateHD
-    #
     # -----------------------------------------------------
 
     text = re.sub(
@@ -407,13 +397,14 @@ def get_font(size):
 
 
 # =========================================================
-# ADD WATERMARK TO POSTER
+# ADD LARGE WATERMARK
 # =========================================================
 
 def add_watermark(image_bytes):
 
     _, _, watermark, enabled = get_settings()
 
+    # Watermark OFF
     if not enabled:
         return image_bytes
 
@@ -424,23 +415,31 @@ def add_watermark(image_bytes):
 
     try:
 
+        # Open image
         image = Image.open(
             io.BytesIO(image_bytes)
         ).convert("RGBA")
 
         width, height = image.size
 
-        # Watermark size based on image width
+        # =================================================
+        # LARGE WATERMARK
+        # 8% of image width
+        # =================================================
+
         font_size = max(
-            24,
-            int(width * 0.045)
+            40,
+            int(width * 0.08)
         )
 
         font = get_font(font_size)
 
         draw = ImageDraw.Draw(image)
 
-        # Text dimensions
+        # =================================================
+        # TEXT SIZE
+        # =================================================
+
         bbox = draw.textbbox(
             (0, 0),
             watermark,
@@ -450,9 +449,12 @@ def add_watermark(image_bytes):
         text_width = bbox[2] - bbox[0]
         text_height = bbox[3] - bbox[1]
 
-        # Bottom-right margin
+        # =================================================
+        # BOTTOM RIGHT
+        # =================================================
+
         margin = max(
-            20,
+            25,
             int(width * 0.025)
         )
 
@@ -460,14 +462,18 @@ def add_watermark(image_bytes):
 
         y = height - text_height - margin
 
+        # =================================================
+        # LARGE BACKGROUND PADDING
+        # =================================================
+
         padding_x = max(
-            10,
-            int(width * 0.012)
+            16,
+            int(width * 0.018)
         )
 
         padding_y = max(
-            6,
-            int(width * 0.008)
+            10,
+            int(width * 0.012)
         )
 
         background_box = (
@@ -477,20 +483,30 @@ def add_watermark(image_bytes):
             y + text_height + padding_y
         )
 
-        # Semi-transparent black background
+        # =================================================
+        # DARK TRANSPARENT BACKGROUND
+        # =================================================
+
         draw.rounded_rectangle(
             background_box,
-            radius=10,
-            fill=(0, 0, 0, 150)
+            radius=14,
+            fill=(0, 0, 0, 165)
         )
 
-        # White watermark
+        # =================================================
+        # WHITE BOLD TEXT
+        # =================================================
+
         draw.text(
             (x, y),
             watermark,
             font=font,
             fill=(255, 255, 255, 255)
         )
+
+        # =================================================
+        # SAVE IMAGE
+        # =================================================
 
         output = io.BytesIO()
 
@@ -513,8 +529,7 @@ def add_watermark(image_bytes):
             f"Watermark error: {e}"
         )
 
-        # If watermark processing fails,
-        # return original image.
+        # Fallback to original
         return image_bytes
 
 
@@ -539,7 +554,7 @@ async def start(update, context):
 
 • Replace Telegram usernames & links
 • Keep movie/download URLs unchanged
-• Automatic poster watermark
+• Large poster watermark
 • Customize caption
 • Multiple Source Channels
 
@@ -632,7 +647,7 @@ async def addchannel(update, context):
 
 
 # =========================================================
-# CHANNEL LIST
+# SHOW CHANNELS
 # =========================================================
 
 async def channels(update, context):
@@ -702,7 +717,7 @@ async def removechannel(update, context):
 
 
 # =========================================================
-# SET SOURCE URL
+# SET SOURCE
 # =========================================================
 
 async def setsource(update, context):
@@ -847,9 +862,9 @@ async def settings(update, context):
 
     channel_list = get_channels()
 
-    text = "⚙️ SETTINGS\n\n"
+    text = "⚙️ <b>SETTINGS</b>\n\n"
 
-    text += "📢 Source URL:\n"
+    text += "📢 <b>Source URL:</b>\n"
 
     text += (
         source_url
@@ -857,7 +872,7 @@ async def settings(update, context):
         else "Not Set"
     )
 
-    text += "\n\n🖼️ Watermark:\n"
+    text += "\n\n🖼️ <b>Watermark:</b>\n"
 
     text += (
         watermark
@@ -865,7 +880,7 @@ async def settings(update, context):
         else "Not Set"
     )
 
-    text += "\n\n🔘 Watermark Status:\n"
+    text += "\n\n🔘 <b>Watermark Status:</b>\n"
 
     text += (
         "ON ✅"
@@ -873,7 +888,7 @@ async def settings(update, context):
         else "OFF ❌"
     )
 
-    text += "\n\n📝 Footer:\n"
+    text += "\n\n📝 <b>Footer:</b>\n"
 
     text += (
         footer
@@ -881,7 +896,7 @@ async def settings(update, context):
         else "Not Set"
     )
 
-    text += "\n\n📚 Source Channels:\n"
+    text += "\n\n📚 <b>Source Channels:</b>\n"
 
     if channel_list:
 
@@ -901,15 +916,13 @@ async def settings(update, context):
 
 
 # =========================================================
-# PROCESS USER POST
+# PROCESS POST
 # =========================================================
 
 async def send_to_all_channels(
     update,
     context
 ):
-
-    # Everyone can send posts
 
     if not update.message:
         return
@@ -964,22 +977,27 @@ async def send_to_all_channels(
 
         try:
 
+            # Highest resolution photo
             photo = message.photo[-1]
 
             telegram_file = await context.bot.get_file(
                 photo.file_id
             )
 
+            # Download poster
             image_bytes = await telegram_file.download_as_bytearray()
 
+            # Add large watermark
             processed_image = add_watermark(
                 bytes(image_bytes)
             )
 
+            # Process caption
             caption = format_caption(
                 message.caption
             )
 
+            # Send to every Source Channel
             for channel in channel_list:
 
                 try:
@@ -1009,6 +1027,7 @@ async def send_to_all_channels(
                 f"Poster processing error: {e}"
             )
 
+            # Fallback to original poster
             caption = format_caption(
                 message.caption
             )
@@ -1138,7 +1157,7 @@ async def send_to_all_channels(
 
 
     # =====================================================
-    # OTHER
+    # OTHER MESSAGE TYPES
     # =====================================================
 
     else:
@@ -1161,7 +1180,7 @@ async def send_to_all_channels(
 
 
     # =====================================================
-    # SUCCESS
+    # SUCCESS MESSAGE
     # =====================================================
 
     await send_bold_message(
@@ -1258,57 +1277,90 @@ def main():
         .build()
     )
 
-    # -------------------------
-    # Commands
-    # -------------------------
+    # =====================================================
+    # COMMANDS
+    # =====================================================
 
     application.add_handler(
-        CommandHandler("start", start)
+        CommandHandler(
+            "start",
+            start
+        )
     )
 
     application.add_handler(
-        CommandHandler("help", help_command)
+        CommandHandler(
+            "help",
+            help_command
+        )
     )
 
     application.add_handler(
-        CommandHandler("addchannel", addchannel)
+        CommandHandler(
+            "addchannel",
+            addchannel
+        )
     )
 
     application.add_handler(
-        CommandHandler("channels", channels)
+        CommandHandler(
+            "channels",
+            channels
+        )
     )
 
     application.add_handler(
-        CommandHandler("removechannel", removechannel)
+        CommandHandler(
+            "removechannel",
+            removechannel
+        )
     )
 
     application.add_handler(
-        CommandHandler("setsource", setsource)
+        CommandHandler(
+            "setsource",
+            setsource
+        )
     )
 
     application.add_handler(
-        CommandHandler("setfooter", setfooter)
+        CommandHandler(
+            "setfooter",
+            setfooter
+        )
     )
 
     application.add_handler(
-        CommandHandler("setwatermark", setwatermark)
+        CommandHandler(
+            "setwatermark",
+            setwatermark
+        )
     )
 
     application.add_handler(
-        CommandHandler("watermark_on", watermark_on)
+        CommandHandler(
+            "watermark_on",
+            watermark_on
+        )
     )
 
     application.add_handler(
-        CommandHandler("watermark_off", watermark_off)
+        CommandHandler(
+            "watermark_off",
+            watermark_off
+        )
     )
 
     application.add_handler(
-        CommandHandler("settings", settings)
+        CommandHandler(
+            "settings",
+            settings
+        )
     )
 
-    # -------------------------
-    # User Posts
-    # -------------------------
+    # =====================================================
+    # ALL USERS CAN SEND POSTS
+    # =====================================================
 
     application.add_handler(
         MessageHandler(
