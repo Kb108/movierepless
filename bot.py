@@ -1,7 +1,14 @@
 import os
+import re
 import sqlite3
 import logging
-from telegram import Update
+
+from telegram import (
+    Update,
+    ReplyKeyboardMarkup,
+    BotCommand,
+)
+from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -26,6 +33,7 @@ Best loot offers 🛍️ 🤝 💸
 📌 @loot_dells
 📌 @loot_dells"""
 
+
 # =========================================================
 # LOGGING
 # =========================================================
@@ -37,22 +45,30 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+
 # =========================================================
 # DATABASE
 # =========================================================
 
-def db():
+def get_db():
     return sqlite3.connect(DB_FILE)
 
 
 def init_db():
-    conn = db()
+
+    conn = get_db()
     cur = conn.cursor()
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS channels (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel TEXT UNIQUE NOT NULL
+        )
+    """)
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS settings (
             id INTEGER PRIMARY KEY CHECK (id = 1),
-            source_channel TEXT DEFAULT '',
             replace_text TEXT DEFAULT '',
             footer TEXT DEFAULT ''
         )
@@ -60,36 +76,42 @@ def init_db():
 
     cur.execute("""
         INSERT OR IGNORE INTO settings
-        (id, source_channel, replace_text, footer)
-        VALUES (1, '', '', ?)
+        (id, replace_text, footer)
+        VALUES (1, '', ?)
     """, (DEFAULT_FOOTER,))
 
     conn.commit()
     conn.close()
 
 
+# =========================================================
+# SETTINGS
+# =========================================================
+
 def get_settings():
-    conn = db()
+
+    conn = get_db()
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT source_channel, replace_text, footer
+        SELECT replace_text, footer
         FROM settings
         WHERE id = 1
     """)
 
     row = cur.fetchone()
+
     conn.close()
 
     if not row:
-        return "", "", DEFAULT_FOOTER
+        return "", DEFAULT_FOOTER
 
-    return row[0] or "", row[1] or "", row[2] or ""
+    return row[0] or "", row[1] or ""
 
 
 def update_setting(column, value):
+
     allowed = {
-        "source_channel",
         "replace_text",
         "footer"
     }
@@ -97,7 +119,7 @@ def update_setting(column, value):
     if column not in allowed:
         return
 
-    conn = db()
+    conn = get_db()
     cur = conn.cursor()
 
     cur.execute(
@@ -110,10 +132,73 @@ def update_setting(column, value):
 
 
 # =========================================================
-# ADMIN CHECK
+# CHANNEL FUNCTIONS
 # =========================================================
 
-def is_admin(update: Update):
+def add_channel(channel):
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    try:
+
+        cur.execute(
+            "INSERT INTO channels (channel) VALUES (?)",
+            (channel,)
+        )
+
+        conn.commit()
+
+        result = True
+
+    except sqlite3.IntegrityError:
+
+        result = False
+
+    conn.close()
+
+    return result
+
+
+def remove_channel(channel):
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(
+        "DELETE FROM channels WHERE channel = ?",
+        (channel,)
+    )
+
+    deleted = cur.rowcount
+
+    conn.commit()
+    conn.close()
+
+    return deleted > 0
+
+
+def get_channels():
+
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(
+        "SELECT channel FROM channels ORDER BY id ASC"
+    )
+
+    rows = cur.fetchall()
+
+    conn.close()
+
+    return [row[0] for row in rows]
+
+
+# =========================================================
+# ADMIN
+# =========================================================
+
+def is_admin(update):
 
     if not update.effective_user:
         return False
@@ -121,122 +206,305 @@ def is_admin(update: Update):
     return update.effective_user.id == ADMIN_ID
 
 
-async def admin_only(update: Update):
+async def check_admin(update):
 
     if not is_admin(update):
+
         if update.message:
+
             await update.message.reply_text(
                 "❌ You are not authorized to use this bot."
             )
+
         return False
 
     return True
 
 
 # =========================================================
+# KEYBOARD
+# =========================================================
+
+def main_keyboard():
+
+    keyboard = [
+        ["📢 Add Channel", "📋 My Channels"],
+        ["🗑️ Remove Channel", "🔄 Set Replace"],
+        ["📝 Set Footer", "⚙️ Settings"],
+        ["❓ Help", "🚀 Start"]
+    ]
+
+    return ReplyKeyboardMarkup(
+        keyboard,
+        resize_keyboard=True,
+        is_persistent=True
+    )
+
+
+# =========================================================
+# TELEGRAM COMMAND MENU
+# =========================================================
+
+async def setup_commands(app):
+
+    commands = [
+
+        BotCommand(
+            "start",
+            "🚀 Start bot"
+        ),
+
+        BotCommand(
+            "help",
+            "❓ Help"
+        ),
+
+        BotCommand(
+            "addchannel",
+            "📢 Add channel"
+        ),
+
+        BotCommand(
+            "channels",
+            "📋 My channels"
+        ),
+
+        BotCommand(
+            "removechannel",
+            "🗑️ Remove channel"
+        ),
+
+        BotCommand(
+            "setreplace",
+            "🔄 Set replace text"
+        ),
+
+        BotCommand(
+            "setfooter",
+            "📝 Set footer"
+        ),
+
+        BotCommand(
+            "settings",
+            "⚙️ Settings"
+        )
+    ]
+
+    await app.bot.set_my_commands(commands)
+
+
+# =========================================================
 # START
 # =========================================================
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start(update, context):
 
-    if not await admin_only(update):
+    if not await check_admin(update):
         return
 
-    text = """🎬 Content Auto Poster Bot
+    await update.message.reply_text(
+        """🎬 Movie Auto Poster Bot
 
-Send a text, TeraBox link, photo or caption here.
+Just send your movie information normally.
 
-The bot will:
+The bot will automatically:
+
+✅ Make the post Bold
+✅ Keep TeraBox links unchanged
 ✅ Replace configured source text
 ✅ Add your footer
-✅ Send the post to your Source Channel
+✅ Post to all added Source Channels
 
-Commands:
-
-/setsource
-/setreplace
-/setfooter
-/settings
-/help
-"""
-
-    await update.message.reply_text(text)
+Use the buttons below 👇""",
+        reply_markup=main_keyboard()
+    )
 
 
 # =========================================================
 # HELP
 # =========================================================
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def help_command(update, context):
 
-    if not await admin_only(update):
+    if not await check_admin(update):
         return
 
-    text = """🛠 Commands
+    await update.message.reply_text(
+        """🛠️ BOT HELP
 
-/setsource @YourChannel
-Set the channel where posts will be published.
+📢 Add Channel
+Add a Source Channel.
 
-/setreplace @OldChannel
-Set text that should be replaced.
+📋 My Channels
+See all added channels.
 
-/setfooter
-Set your automatic footer.
+🗑️ Remove Channel
+Remove a Source Channel.
 
-/settings
-Show current settings.
+🔄 Set Replace
+Set text/username that should be replaced.
 
-After setup, simply send your content to this bot.
-"""
+📝 Set Footer
+Set automatic footer.
+
+⚙️ Settings
+View all current settings.
+
+After setup, simply send your movie post to the bot."""
+    )
+
+
+# =========================================================
+# ADD CHANNEL
+# =========================================================
+
+async def add_channel_command(update, context):
+
+    if not await check_admin(update):
+        return
+
+    if not context.args:
+
+        context.user_data["waiting_for"] = "add_channel"
+
+        await update.message.reply_text(
+            """📢 Send your Source Channel username.
+
+Example:
+
+@MovieSourceHD
+
+Make sure the bot is Admin in that channel."""
+        )
+
+        return
+
+    channel = context.args[0].strip()
+
+    if not channel.startswith("@"):
+
+        channel = "@" + channel
+
+    if add_channel(channel):
+
+        await update.message.reply_text(
+            f"✅ Channel added:\n{channel}",
+            reply_markup=main_keyboard()
+        )
+
+    else:
+
+        await update.message.reply_text(
+            "⚠️ This channel is already added.",
+            reply_markup=main_keyboard()
+        )
+
+
+# =========================================================
+# LIST CHANNELS
+# =========================================================
+
+async def channels_command(update, context):
+
+    if not await check_admin(update):
+        return
+
+    channels = get_channels()
+
+    if not channels:
+
+        await update.message.reply_text(
+            "📋 No Source Channels added yet."
+        )
+
+        return
+
+    text = "📋 Your Source Channels:\n\n"
+
+    for i, channel in enumerate(channels, 1):
+
+        text += f"{i}. {channel}\n"
 
     await update.message.reply_text(text)
 
 
 # =========================================================
-# SET SOURCE
+# REMOVE CHANNEL
 # =========================================================
 
-async def setsource(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def remove_channel_command(update, context):
 
-    if not await admin_only(update):
+    if not await check_admin(update):
         return
 
     if not context.args:
+
+        context.user_data["waiting_for"] = "remove_channel"
+
         await update.message.reply_text(
-            "Example:\n\n/setsource @MySourceChannel"
+            """🗑️ Send the Channel username you want to remove.
+
+Example:
+
+@MovieSourceHD"""
         )
+
         return
 
     channel = context.args[0].strip()
 
-    update_setting("source_channel", channel)
+    if not channel.startswith("@"):
 
-    await update.message.reply_text(
-        f"✅ Source Channel saved:\n{channel}"
-    )
+        channel = "@" + channel
+
+    if remove_channel(channel):
+
+        await update.message.reply_text(
+            f"✅ Removed:\n{channel}",
+            reply_markup=main_keyboard()
+        )
+
+    else:
+
+        await update.message.reply_text(
+            "❌ Channel not found."
+        )
 
 
 # =========================================================
 # SET REPLACE
 # =========================================================
 
-async def setreplace(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def set_replace_command(update, context):
 
-    if not await admin_only(update):
+    if not await check_admin(update):
         return
 
     if not context.args:
+
+        context.user_data["waiting_for"] = "set_replace"
+
         await update.message.reply_text(
-            "Example:\n\n/setreplace @OldChannel"
+            """🔄 Send the username/text that should be replaced.
+
+Example:
+
+@OldChannel
+
+After this, the bot will replace it with the first added Source Channel."""
         )
+
         return
 
-    replace_text = " ".join(context.args).strip()
+    value = " ".join(context.args).strip()
 
-    update_setting("replace_text", replace_text)
+    update_setting(
+        "replace_text",
+        value
+    )
 
     await update.message.reply_text(
-        f"✅ Replace text saved:\n{replace_text}"
+        f"✅ Replace text saved:\n{value}"
     )
 
 
@@ -244,33 +512,39 @@ async def setreplace(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # SET FOOTER
 # =========================================================
 
-async def setfooter(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def set_footer_command(update, context):
 
-    if not await admin_only(update):
+    if not await check_admin(update):
         return
 
-    # Everything after /setfooter
-    message_text = update.message.text or ""
+    if not context.args:
 
-    footer = message_text[len("/setfooter"):].strip()
+        context.user_data["waiting_for"] = "set_footer"
 
-    if not footer:
         await update.message.reply_text(
-            """Example:
+            """📝 Send your complete footer.
 
-/setfooter Join Backup Channel ❤️👇
+Example:
+
+Join Backup Channel ❤️👇
 @backup_stor
 
 Best loot offers 🛍️ 🤝 💸
 📌 @loot_dells
 📌 @loot_dells"""
         )
+
         return
 
-    update_setting("footer", footer)
+    footer = " ".join(context.args)
+
+    update_setting(
+        "footer",
+        footer
+    )
 
     await update.message.reply_text(
-        "✅ Footer saved successfully."
+        "✅ Footer saved."
     )
 
 
@@ -278,250 +552,475 @@ Best loot offers 🛍️ 🤝 💸
 # SETTINGS
 # =========================================================
 
-async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def settings_command(update, context):
 
-    if not await admin_only(update):
+    if not await check_admin(update):
         return
 
-    source, replace_text, footer = get_settings()
+    channels = get_channels()
 
-    if not source:
-        source = "❌ Not set"
+    replace_text, footer = get_settings()
+
+    channel_text = "\n".join(
+        f"• {channel}"
+        for channel in channels
+    )
+
+    if not channel_text:
+        channel_text = "❌ None"
 
     if not replace_text:
-        replace_text = "❌ Not set"
+        replace_text = "❌ None"
 
-    if not footer:
-        footer = "❌ Not set"
+    await update.message.reply_text(
+        f"""⚙️ CURRENT SETTINGS
 
-    text = f"""⚙️ Current Settings
+📢 Source Channels:
 
-📢 Source Channel:
-{source}
+{channel_text}
 
-🔄 Replace Text:
+🔄 Replace:
 {replace_text}
 
 📝 Footer:
 
-{footer}
-"""
-
-    await update.message.reply_text(text)
+{footer}"""
+    )
 
 
 # =========================================================
-# PROCESS CAPTION / TEXT
+# FORMAT TEXT
 # =========================================================
 
-def process_text(text):
-
-    source_channel, replace_text, footer = get_settings()
+def escape_html(text):
 
     if not text:
-        text = ""
+        return ""
 
-    # Replace configured source
-    if replace_text:
-        text = text.replace(
-            replace_text,
-            source_channel
-        )
-
-    # Add footer
-    if footer:
-
-        # Prevent duplicate footer
-        if footer.strip() not in text:
-
-            if text.strip():
-                text = text.rstrip() + "\n\n" + footer
-            else:
-                text = footer
+    text = text.replace("&", "&amp;")
+    text = text.replace("<", "&lt;")
+    text = text.replace(">", "&gt;")
 
     return text
 
 
+def format_post(text):
+
+    if not text:
+        text = ""
+
+    replace_text, footer = get_settings()
+
+    channels = get_channels()
+
+    # -----------------------------------------------------
+    # Replace configured username/text
+    # -----------------------------------------------------
+
+    if replace_text and channels:
+
+        # Use first Source Channel for replacement
+        replacement = channels[0]
+
+        text = text.replace(
+            replace_text,
+            replacement
+        )
+
+    # -----------------------------------------------------
+    # Add footer
+    # -----------------------------------------------------
+
+    if footer:
+
+        if footer.strip() not in text:
+
+            if text.strip():
+
+                text = (
+                    text.rstrip()
+                    + "\n\n"
+                    + footer
+                )
+
+            else:
+
+                text = footer
+
+    # -----------------------------------------------------
+    # Preserve URLs while making text bold
+    # -----------------------------------------------------
+
+    parts = re.split(
+        r"(https?://[^\s]+)",
+        text
+    )
+
+    result = ""
+
+    for part in parts:
+
+        if re.match(
+            r"^https?://",
+            part
+        ):
+
+            result += part
+
+        else:
+
+            result += (
+                "<b>"
+                + escape_html(part)
+                + "</b>"
+            )
+
+    return result
+
+
 # =========================================================
-# TEXT MESSAGE
+# SEND TO ALL CHANNELS
 # =========================================================
 
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def send_to_all_channels(
+    context,
+    text=None,
+    photo_id=None,
+    video_id=None,
+    document_id=None
+):
 
-    if not await admin_only(update):
+    channels = get_channels()
+
+    if not channels:
+
+        return False, "No Source Channels configured."
+
+    success = 0
+    errors = []
+
+    for channel in channels:
+
+        try:
+
+            if photo_id:
+
+                await context.bot.send_photo(
+                    chat_id=channel,
+                    photo=photo_id,
+                    caption=text[:1024] if text else None,
+                    parse_mode=ParseMode.HTML
+                )
+
+            elif video_id:
+
+                await context.bot.send_video(
+                    chat_id=channel,
+                    video=video_id,
+                    caption=text[:1024] if text else None,
+                    parse_mode=ParseMode.HTML
+                )
+
+            elif document_id:
+
+                await context.bot.send_document(
+                    chat_id=channel,
+                    document=document_id,
+                    caption=text[:1024] if text else None,
+                    parse_mode=ParseMode.HTML
+                )
+
+            else:
+
+                await context.bot.send_message(
+                    chat_id=channel,
+                    text=text,
+                    parse_mode=ParseMode.HTML,
+                    disable_web_page_preview=False
+                )
+
+            success += 1
+
+        except Exception as e:
+
+            logger.exception(
+                f"Failed to post to {channel}"
+            )
+
+            errors.append(
+                f"{channel}: {str(e)}"
+            )
+
+    if success > 0:
+
+        return True, (
+            f"Posted successfully to "
+            f"{success}/{len(channels)} channels."
+        )
+
+    return False, "\n".join(errors)
+
+
+# =========================================================
+# NORMAL TEXT MESSAGE
+# =========================================================
+
+async def handle_text(update, context):
+
+    if not await check_admin(update):
         return
 
-    source_channel, _, _ = get_settings()
+    text = update.message.text
 
-    if not source_channel:
-        await update.message.reply_text(
-            "❌ Source Channel is not configured.\n\n"
-            "Use:\n"
-            "/setsource @YourChannel"
-        )
+    # -----------------------------------------------------
+    # Button handling
+    # -----------------------------------------------------
+
+    if text == "🚀 Start":
+
+        await start(update, context)
         return
 
-    original_text = update.message.text
+    if text == "❓ Help":
 
-    new_text = process_text(original_text)
+        await help_command(update, context)
+        return
 
-    try:
+    if text == "📢 Add Channel":
 
-        await context.bot.send_message(
-            chat_id=source_channel,
-            text=new_text,
-            disable_web_page_preview=False
+        await add_channel_command(update, context)
+        return
+
+    if text == "📋 My Channels":
+
+        await channels_command(update, context)
+        return
+
+    if text == "🗑️ Remove Channel":
+
+        await remove_channel_command(update, context)
+        return
+
+    if text == "🔄 Set Replace":
+
+        await set_replace_command(update, context)
+        return
+
+    if text == "📝 Set Footer":
+
+        await set_footer_command(update, context)
+        return
+
+    if text == "⚙️ Settings":
+
+        await settings_command(update, context)
+        return
+
+    # -----------------------------------------------------
+    # Waiting for button input
+    # -----------------------------------------------------
+
+    waiting = context.user_data.get(
+        "waiting_for"
+    )
+
+    if waiting == "add_channel":
+
+        channel = text.strip()
+
+        if not channel.startswith("@"):
+
+            channel = "@" + channel
+
+        if add_channel(channel):
+
+            await update.message.reply_text(
+                f"✅ Channel added:\n{channel}",
+                reply_markup=main_keyboard()
+            )
+
+        else:
+
+            await update.message.reply_text(
+                "⚠️ Channel already exists.",
+                reply_markup=main_keyboard()
+            )
+
+        context.user_data.pop(
+            "waiting_for",
+            None
+        )
+
+        return
+
+    if waiting == "remove_channel":
+
+        channel = text.strip()
+
+        if not channel.startswith("@"):
+
+            channel = "@" + channel
+
+        if remove_channel(channel):
+
+            await update.message.reply_text(
+                f"✅ Channel removed:\n{channel}",
+                reply_markup=main_keyboard()
+            )
+
+        else:
+
+            await update.message.reply_text(
+                "❌ Channel not found."
+            )
+
+        context.user_data.pop(
+            "waiting_for",
+            None
+        )
+
+        return
+
+    if waiting == "set_replace":
+
+        update_setting(
+            "replace_text",
+            text.strip()
         )
 
         await update.message.reply_text(
-            "✅ Posted successfully to Source Channel."
+            "✅ Replace text saved.",
+            reply_markup=main_keyboard()
         )
 
-    except Exception as e:
+        context.user_data.pop(
+            "waiting_for",
+            None
+        )
 
-        logger.exception("Posting error")
+        return
+
+    if waiting == "set_footer":
+
+        update_setting(
+            "footer",
+            text.strip()
+        )
 
         await update.message.reply_text(
-            "❌ Could not post to Source Channel.\n\n"
-            f"Error: {str(e)}"
+            "✅ Footer saved.",
+            reply_markup=main_keyboard()
+        )
+
+        context.user_data.pop(
+            "waiting_for",
+            None
+        )
+
+        return
+
+    # -----------------------------------------------------
+    # NORMAL MOVIE POST
+    # -----------------------------------------------------
+
+    formatted = format_post(text)
+
+    success, result = await send_to_all_channels(
+        context,
+        text=formatted
+    )
+
+    if success:
+
+        await update.message.reply_text(
+            f"✅ {result}",
+            reply_markup=main_keyboard()
+        )
+
+    else:
+
+        await update.message.reply_text(
+            f"❌ Could not post.\n\n{result}",
+            reply_markup=main_keyboard()
         )
 
 
 # =========================================================
-# PHOTO MESSAGE
+# PHOTO
 # =========================================================
 
-async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_photo(update, context):
 
-    if not await admin_only(update):
+    if not await check_admin(update):
         return
-
-    source_channel, _, _ = get_settings()
-
-    if not source_channel:
-        await update.message.reply_text(
-            "❌ Source Channel is not configured.\n\n"
-            "Use:\n"
-            "/setsource @YourChannel"
-        )
-        return
-
-    photo = update.message.photo[-1]
 
     caption = update.message.caption or ""
 
-    new_caption = process_text(caption)
+    formatted = format_post(caption)
 
-    try:
+    success, result = await send_to_all_channels(
+        context,
+        text=formatted,
+        photo_id=update.message.photo[-1].file_id
+    )
 
-        await context.bot.send_photo(
-            chat_id=source_channel,
-            photo=photo.file_id,
-            caption=new_caption[:1024]
-        )
-
-        await update.message.reply_text(
-            "✅ Photo posted successfully."
-        )
-
-    except Exception as e:
-
-        logger.exception("Photo posting error")
-
-        await update.message.reply_text(
-            "❌ Could not post photo.\n\n"
-            f"Error: {str(e)}"
-        )
+    await update.message.reply_text(
+        ("✅ " if success else "❌ ")
+        + result,
+        reply_markup=main_keyboard()
+    )
 
 
 # =========================================================
-# VIDEO MESSAGE
+# VIDEO
 # =========================================================
 
-async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_video(update, context):
 
-    if not await admin_only(update):
+    if not await check_admin(update):
         return
-
-    source_channel, _, _ = get_settings()
-
-    if not source_channel:
-        await update.message.reply_text(
-            "❌ Source Channel is not configured."
-        )
-        return
-
-    video = update.message.video
 
     caption = update.message.caption or ""
 
-    new_caption = process_text(caption)
+    formatted = format_post(caption)
 
-    try:
+    success, result = await send_to_all_channels(
+        context,
+        text=formatted,
+        video_id=update.message.video.file_id
+    )
 
-        await context.bot.send_video(
-            chat_id=source_channel,
-            video=video.file_id,
-            caption=new_caption[:1024]
-        )
-
-        await update.message.reply_text(
-            "✅ Video posted successfully."
-        )
-
-    except Exception as e:
-
-        logger.exception("Video posting error")
-
-        await update.message.reply_text(
-            "❌ Could not post video.\n\n"
-            f"Error: {str(e)}"
-        )
+    await update.message.reply_text(
+        ("✅ " if success else "❌ ")
+        + result,
+        reply_markup=main_keyboard()
+    )
 
 
 # =========================================================
-# DOCUMENT MESSAGE
+# DOCUMENT
 # =========================================================
 
-async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_document(update, context):
 
-    if not await admin_only(update):
+    if not await check_admin(update):
         return
-
-    source_channel, _, _ = get_settings()
-
-    if not source_channel:
-        await update.message.reply_text(
-            "❌ Source Channel is not configured."
-        )
-        return
-
-    document = update.message.document
 
     caption = update.message.caption or ""
 
-    new_caption = process_text(caption)
+    formatted = format_post(caption)
 
-    try:
+    success, result = await send_to_all_channels(
+        context,
+        text=formatted,
+        document_id=update.message.document.file_id
+    )
 
-        await context.bot.send_document(
-            chat_id=source_channel,
-            document=document.file_id,
-            caption=new_caption[:1024]
-        )
-
-        await update.message.reply_text(
-            "✅ Document posted successfully."
-        )
-
-    except Exception as e:
-
-        logger.exception("Document posting error")
-
-        await update.message.reply_text(
-            "❌ Could not post document.\n\n"
-            f"Error: {str(e)}"
-        )
+    await update.message.reply_text(
+        ("✅ " if success else "❌ ")
+        + result,
+        reply_markup=main_keyboard()
+    )
 
 
 # =========================================================
@@ -531,18 +1030,26 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
 
     if not BOT_TOKEN:
+
         raise ValueError(
-            "BOT_TOKEN environment variable is missing."
+            "BOT_TOKEN is missing."
         )
 
     if not ADMIN_ID:
+
         raise ValueError(
-            "ADMIN_ID environment variable is missing."
+            "ADMIN_ID is missing."
         )
 
     init_db()
 
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = (
+        Application
+        .builder()
+        .token(BOT_TOKEN)
+        .post_init(setup_commands)
+        .build()
+    )
 
     # Commands
     app.add_handler(
@@ -554,19 +1061,45 @@ def main():
     )
 
     app.add_handler(
-        CommandHandler("setsource", setsource)
+        CommandHandler(
+            "addchannel",
+            add_channel_command
+        )
     )
 
     app.add_handler(
-        CommandHandler("setreplace", setreplace)
+        CommandHandler(
+            "channels",
+            channels_command
+        )
     )
 
     app.add_handler(
-        CommandHandler("setfooter", setfooter)
+        CommandHandler(
+            "removechannel",
+            remove_channel_command
+        )
     )
 
     app.add_handler(
-        CommandHandler("settings", settings)
+        CommandHandler(
+            "setreplace",
+            set_replace_command
+        )
+    )
+
+    app.add_handler(
+        CommandHandler(
+            "setfooter",
+            set_footer_command
+        )
+    )
+
+    app.add_handler(
+        CommandHandler(
+            "settings",
+            settings_command
+        )
     )
 
     # Media
@@ -599,7 +1132,7 @@ def main():
         )
     )
 
-    print("🤖 Bot is running...")
+    print("🤖 Movie Auto Poster Bot is running...")
 
     app.run_polling(
         allowed_updates=Update.ALL_TYPES
