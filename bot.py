@@ -3,6 +3,7 @@ import re
 import html
 import sqlite3
 import io
+import random
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -242,7 +243,7 @@ def remove_channel(channel):
 
 
 # =========================================================
-# ADMIN CHECK
+# ADMIN
 # =========================================================
 
 def is_admin(update):
@@ -284,7 +285,7 @@ async def send_bold_message(message, text):
 
 
 # =========================================================
-# TELEGRAM LINK / USERNAME REPLACEMENT
+# TELEGRAM REPLACEMENT
 # =========================================================
 
 def replace_telegram_links(text):
@@ -310,7 +311,7 @@ def replace_telegram_links(text):
 
     source_username = match.group(1)
 
-    # Replace Telegram URLs
+    # Replace Telegram links
     text = re.sub(
         r"https?://t\.me/[^\s<>()]+",
         source_url,
@@ -329,7 +330,7 @@ def replace_telegram_links(text):
 
 
 # =========================================================
-# FORMAT CAPTION
+# CAPTION
 # =========================================================
 
 def format_caption(text):
@@ -344,6 +345,7 @@ def format_caption(text):
     footer = footer.strip()
 
     if footer:
+
         result += "\n\n" + footer
 
     result = html.escape(result)
@@ -378,7 +380,7 @@ def get_font(size):
 
 
 # =========================================================
-# LARGE WATERMARK - 20%
+# RANDOM WATERMARK
 # =========================================================
 
 def add_watermark(image_bytes):
@@ -402,7 +404,7 @@ def add_watermark(image_bytes):
         width, height = image.size
 
         # =================================================
-        # 20% WATERMARK
+        # VERY LARGE WATERMARK
         # =================================================
 
         font_size = max(
@@ -428,26 +430,18 @@ def add_watermark(image_bytes):
         text_height = bbox[3] - bbox[1]
 
         # =================================================
-        # BOTTOM RIGHT POSITION
+        # IF TEXT IS TOO WIDE, REDUCE FONT
         # =================================================
 
-        margin = max(
-            30,
-            int(width * 0.035)
-        )
+        max_text_width = int(width * 0.82)
 
-        # Prevent the watermark from going outside
-        # the image on very small posters.
+        if text_width > max_text_width:
 
-        if text_width + margin > width:
+            ratio = max_text_width / text_width
 
             font_size = max(
                 40,
-                int(
-                    (width - margin * 2)
-                    * 0.90
-                    / max(len(watermark), 1)
-                )
+                int(font_size * ratio)
             )
 
             font = get_font(font_size)
@@ -461,12 +455,49 @@ def add_watermark(image_bytes):
             text_width = bbox[2] - bbox[0]
             text_height = bbox[3] - bbox[1]
 
-        x = width - text_width - margin
+        # =================================================
+        # SAFE AREA
+        # =================================================
 
-        y = height - text_height - margin
+        safe_margin_x = max(
+            25,
+            int(width * 0.08)
+        )
+
+        safe_margin_y = max(
+            25,
+            int(height * 0.08)
+        )
 
         # =================================================
-        # LARGE BACKGROUND
+        # RANDOM POSITION
+        #
+        # Every poster gets a different position.
+        # =================================================
+
+        max_x = max(
+            safe_margin_x,
+            width - text_width - safe_margin_x
+        )
+
+        max_y = max(
+            safe_margin_y,
+            height - text_height - safe_margin_y
+        )
+
+        # Random position
+        x = random.randint(
+            safe_margin_x,
+            max_x
+        )
+
+        y = random.randint(
+            safe_margin_y,
+            max_y
+        )
+
+        # =================================================
+        # PADDING
         # =================================================
 
         padding_x = max(
@@ -479,25 +510,40 @@ def add_watermark(image_bytes):
             int(width * 0.025)
         )
 
-        background_box = (
-            max(0, x - padding_x),
-            max(0, y - padding_y),
-            min(width, x + text_width + padding_x),
-            min(height, y + text_height + padding_y)
-        )
+        # =================================================
+        # BLACK BACKGROUND
+        # =================================================
 
-        # =================================================
-        # BLACK TRANSPARENT BACKGROUND
-        # =================================================
+        background_box = (
+            max(
+                0,
+                x - padding_x
+            ),
+
+            max(
+                0,
+                y - padding_y
+            ),
+
+            min(
+                width,
+                x + text_width + padding_x
+            ),
+
+            min(
+                height,
+                y + text_height + padding_y
+            )
+        )
 
         draw.rounded_rectangle(
             background_box,
             radius=18,
-            fill=(0, 0, 0, 175)
+            fill=(0, 0, 0, 180)
         )
 
         # =================================================
-        # WHITE BOLD WATERMARK
+        # WHITE LARGE TEXT
         # =================================================
 
         draw.text(
@@ -508,7 +554,7 @@ def add_watermark(image_bytes):
         )
 
         # =================================================
-        # SAVE
+        # SAVE IMAGE
         # =================================================
 
         output = io.BytesIO()
@@ -556,7 +602,7 @@ async def start(update, context):
 
 • Replace Telegram usernames & links
 • Keep movie/download URLs unchanged
-• Large 20% poster watermark
+• Large random poster watermark
 • Customize caption
 • Multiple Source Channels
 
@@ -649,7 +695,7 @@ async def addchannel(update, context):
 
 
 # =========================================================
-# SHOW CHANNELS
+# CHANNELS
 # =========================================================
 
 async def channels(update, context):
@@ -777,13 +823,18 @@ async def setfooter(update, context):
 
         return
 
-    footer = " ".join(context.args)
+    # Keep the complete footer exactly as typed
+    footer = " ".join(context.args).strip()
 
     set_footer(footer)
 
-    await send_bold_message(
-        update.message,
-        "✅ Footer updated successfully."
+    # Show the saved footer immediately
+    await update.message.reply_text(
+        "<b>✅ Footer updated successfully.</b>\n\n"
+        "<b>Saved Footer:</b>\n"
+        + html.escape(footer),
+        parse_mode=ParseMode.HTML,
+        reply_markup=ReplyKeyboardRemove()
     )
 
 
@@ -864,47 +915,45 @@ async def settings(update, context):
 
     channel_list = get_channels()
 
-    text = "⚙️ <b>SETTINGS</b>\n\n"
+    # Escape every database value before putting it
+    # inside HTML Telegram message.
+    safe_source = html.escape(
+        source_url.strip()
+    ) if source_url else "Not Set"
 
-    text += "📢 <b>Source URL:</b>\n"
+    safe_footer = html.escape(
+        footer.strip()
+    ) if footer else "Not Set"
 
-    text += (
-        source_url
-        if source_url
-        else "Not Set"
+    safe_watermark = html.escape(
+        watermark.strip()
+    ) if watermark else "Not Set"
+
+    text = (
+        "⚙️ <b>SETTINGS</b>\n\n"
+
+        "📢 <b>Source URL:</b>\n"
+        f"{safe_source}\n\n"
+
+        "🖼️ <b>Watermark:</b>\n"
+        f"{safe_watermark}\n\n"
+
+        "🔘 <b>Watermark Status:</b>\n"
+        f"{'ON ✅' if enabled else 'OFF ❌'}\n\n"
+
+        "📝 <b>Footer:</b>\n"
+        f"{safe_footer}\n\n"
+
+        "📚 <b>Source Channels:</b>\n"
     )
-
-    text += "\n\n🖼️ <b>Watermark:</b>\n"
-
-    text += (
-        watermark
-        if watermark
-        else "Not Set"
-    )
-
-    text += "\n\n🔘 <b>Watermark Status:</b>\n"
-
-    text += (
-        "ON ✅"
-        if enabled
-        else "OFF ❌"
-    )
-
-    text += "\n\n📝 <b>Footer:</b>\n"
-
-    text += (
-        footer
-        if footer
-        else "Not Set"
-    )
-
-    text += "\n\n📚 <b>Source Channels:</b>\n"
 
     if channel_list:
 
         for channel in channel_list:
 
-            text += f"• {channel}\n"
+            text += (
+                f"• {html.escape(channel)}\n"
+            )
 
     else:
 
@@ -918,7 +967,7 @@ async def settings(update, context):
 
 
 # =========================================================
-# SEND POST TO ALL CHANNELS
+# SEND POST
 # =========================================================
 
 async def send_to_all_channels(
@@ -987,7 +1036,7 @@ async def send_to_all_channels(
 
             image_bytes = await telegram_file.download_as_bytearray()
 
-            # 20% watermark
+            # Add LARGE RANDOM watermark
             processed_image = add_watermark(
                 bytes(image_bytes)
             )
