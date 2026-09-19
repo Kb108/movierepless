@@ -271,7 +271,7 @@ async def admin_only(update):
 
 
 # =========================================================
-# BOLD REPLY
+# BOLD MESSAGE
 # =========================================================
 
 async def send_bold_message(message, text):
@@ -284,7 +284,7 @@ async def send_bold_message(message, text):
 
 
 # =========================================================
-# TELEGRAM URL + USERNAME REPLACEMENT
+# TELEGRAM LINK / USERNAME REPLACEMENT
 # =========================================================
 
 def replace_telegram_links(text):
@@ -299,14 +299,6 @@ def replace_telegram_links(text):
     if not source_url:
         return text
 
-    # -----------------------------------------------------
-    # Extract source username
-    #
-    # https://t.me/MovieUpdateHD
-    #
-    # -> MovieUpdateHD
-    # -----------------------------------------------------
-
     match = re.match(
         r"^https?://t\.me/([A-Za-z0-9_]+)",
         source_url,
@@ -318,10 +310,7 @@ def replace_telegram_links(text):
 
     source_username = match.group(1)
 
-    # -----------------------------------------------------
-    # Telegram URL -> Telegram URL
-    # -----------------------------------------------------
-
+    # Replace Telegram URLs
     text = re.sub(
         r"https?://t\.me/[^\s<>()]+",
         source_url,
@@ -329,14 +318,7 @@ def replace_telegram_links(text):
         flags=re.IGNORECASE
     )
 
-    # -----------------------------------------------------
-    # Telegram username -> Telegram username
-    #
-    # @OldChannel
-    # ->
-    # @MovieUpdateHD
-    # -----------------------------------------------------
-
+    # Replace Telegram usernames
     text = re.sub(
         r"(?<![\w])@[A-Za-z0-9_]{5,32}\b",
         "@" + source_username,
@@ -362,7 +344,6 @@ def format_caption(text):
     footer = footer.strip()
 
     if footer:
-
         result += "\n\n" + footer
 
     result = html.escape(result)
@@ -371,7 +352,7 @@ def format_caption(text):
 
 
 # =========================================================
-# WATERMARK FONT
+# FONT
 # =========================================================
 
 def get_font(size):
@@ -397,14 +378,13 @@ def get_font(size):
 
 
 # =========================================================
-# ADD LARGE WATERMARK
+# LARGE WATERMARK - 20%
 # =========================================================
 
 def add_watermark(image_bytes):
 
     _, _, watermark, enabled = get_settings()
 
-    # Watermark OFF
     if not enabled:
         return image_bytes
 
@@ -415,7 +395,6 @@ def add_watermark(image_bytes):
 
     try:
 
-        # Open image
         image = Image.open(
             io.BytesIO(image_bytes)
         ).convert("RGBA")
@@ -423,13 +402,12 @@ def add_watermark(image_bytes):
         width, height = image.size
 
         # =================================================
-        # LARGE WATERMARK
-        # 8% of image width
+        # 20% WATERMARK
         # =================================================
 
         font_size = max(
-            40,
-            int(width * 0.08)
+            60,
+            int(width * 0.20)
         )
 
         font = get_font(font_size)
@@ -450,51 +428,76 @@ def add_watermark(image_bytes):
         text_height = bbox[3] - bbox[1]
 
         # =================================================
-        # BOTTOM RIGHT
+        # BOTTOM RIGHT POSITION
         # =================================================
 
         margin = max(
-            25,
-            int(width * 0.025)
+            30,
+            int(width * 0.035)
         )
+
+        # Prevent the watermark from going outside
+        # the image on very small posters.
+
+        if text_width + margin > width:
+
+            font_size = max(
+                40,
+                int(
+                    (width - margin * 2)
+                    * 0.90
+                    / max(len(watermark), 1)
+                )
+            )
+
+            font = get_font(font_size)
+
+            bbox = draw.textbbox(
+                (0, 0),
+                watermark,
+                font=font
+            )
+
+            text_width = bbox[2] - bbox[0]
+            text_height = bbox[3] - bbox[1]
 
         x = width - text_width - margin
 
         y = height - text_height - margin
 
         # =================================================
-        # LARGE BACKGROUND PADDING
+        # LARGE BACKGROUND
         # =================================================
 
         padding_x = max(
-            16,
-            int(width * 0.018)
+            25,
+            int(width * 0.035)
         )
 
         padding_y = max(
-            10,
-            int(width * 0.012)
+            18,
+            int(width * 0.025)
         )
 
         background_box = (
-            x - padding_x,
-            y - padding_y,
-            x + text_width + padding_x,
-            y + text_height + padding_y
+            max(0, x - padding_x),
+            max(0, y - padding_y),
+            min(width, x + text_width + padding_x),
+            min(height, y + text_height + padding_y)
         )
 
         # =================================================
-        # DARK TRANSPARENT BACKGROUND
+        # BLACK TRANSPARENT BACKGROUND
         # =================================================
 
         draw.rounded_rectangle(
             background_box,
-            radius=14,
-            fill=(0, 0, 0, 165)
+            radius=18,
+            fill=(0, 0, 0, 175)
         )
 
         # =================================================
-        # WHITE BOLD TEXT
+        # WHITE BOLD WATERMARK
         # =================================================
 
         draw.text(
@@ -505,7 +508,7 @@ def add_watermark(image_bytes):
         )
 
         # =================================================
-        # SAVE IMAGE
+        # SAVE
         # =================================================
 
         output = io.BytesIO()
@@ -529,7 +532,6 @@ def add_watermark(image_bytes):
             f"Watermark error: {e}"
         )
 
-        # Fallback to original
         return image_bytes
 
 
@@ -554,7 +556,7 @@ async def start(update, context):
 
 • Replace Telegram usernames & links
 • Keep movie/download URLs unchanged
-• Large poster watermark
+• Large 20% poster watermark
 • Customize caption
 • Multiple Source Channels
 
@@ -916,7 +918,7 @@ async def settings(update, context):
 
 
 # =========================================================
-# PROCESS POST
+# SEND POST TO ALL CHANNELS
 # =========================================================
 
 async def send_to_all_channels(
@@ -970,34 +972,30 @@ async def send_to_all_channels(
 
 
     # =====================================================
-    # PHOTO / POSTER
+    # PHOTO
     # =====================================================
 
     elif message.photo:
 
         try:
 
-            # Highest resolution photo
             photo = message.photo[-1]
 
             telegram_file = await context.bot.get_file(
                 photo.file_id
             )
 
-            # Download poster
             image_bytes = await telegram_file.download_as_bytearray()
 
-            # Add large watermark
+            # 20% watermark
             processed_image = add_watermark(
                 bytes(image_bytes)
             )
 
-            # Process caption
             caption = format_caption(
                 message.caption
             )
 
-            # Send to every Source Channel
             for channel in channel_list:
 
                 try:
@@ -1027,7 +1025,6 @@ async def send_to_all_channels(
                 f"Poster processing error: {e}"
             )
 
-            # Fallback to original poster
             caption = format_caption(
                 message.caption
             )
@@ -1157,7 +1154,7 @@ async def send_to_all_channels(
 
 
     # =====================================================
-    # OTHER MESSAGE TYPES
+    # OTHER
     # =====================================================
 
     else:
@@ -1180,7 +1177,7 @@ async def send_to_all_channels(
 
 
     # =====================================================
-    # SUCCESS MESSAGE
+    # SUCCESS
     # =====================================================
 
     await send_bold_message(
@@ -1190,7 +1187,7 @@ async def send_to_all_channels(
 
 
 # =========================================================
-# TELEGRAM MENU
+# BOT MENU
 # =========================================================
 
 async def setup_bot(application):
@@ -1277,9 +1274,7 @@ def main():
         .build()
     )
 
-    # =====================================================
-    # COMMANDS
-    # =====================================================
+    # Commands
 
     application.add_handler(
         CommandHandler(
@@ -1358,9 +1353,7 @@ def main():
         )
     )
 
-    # =====================================================
-    # ALL USERS CAN SEND POSTS
-    # =====================================================
+    # All non-command messages
 
     application.add_handler(
         MessageHandler(
