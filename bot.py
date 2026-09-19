@@ -39,7 +39,6 @@ except ValueError:
         "ADMIN_ID must be a numeric Telegram User ID."
     )
 
-
 DB_FILE = "bot.db"
 
 
@@ -56,12 +55,45 @@ logger = logging.getLogger(__name__)
 
 
 # =========================================================
+# BOLD MESSAGE FUNCTION
+# =========================================================
+
+def bold_text(text):
+    """
+    Makes the complete Telegram message Bold.
+    """
+
+    if not text:
+        return ""
+
+    return f"<b>{html.escape(str(text))}</b>"
+
+
+async def send_bold_message(
+    message,
+    text
+):
+    """
+    Sends every bot message in Bold
+    and removes any old Reply Keyboard.
+    """
+
+    await message.reply_text(
+        bold_text(text),
+        parse_mode="HTML",
+        reply_markup=ReplyKeyboardRemove()
+    )
+
+
+# =========================================================
 # DATABASE
 # =========================================================
 
 def get_db():
+
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
+
     return conn
 
 
@@ -124,9 +156,10 @@ async def admin_only(update: Update):
     if not is_admin(update):
 
         if update.message:
-            await update.message.reply_text(
-                "❌ You are not authorized to use this bot.",
-                reply_markup=ReplyKeyboardRemove()
+
+            await send_bold_message(
+                update.message,
+                "❌ You are not authorized to use this bot."
             )
 
         return False
@@ -151,7 +184,10 @@ def get_channels():
 
     conn.close()
 
-    return [row["channel"] for row in rows]
+    return [
+        row["channel"]
+        for row in rows
+    ]
 
 
 def add_channel(channel):
@@ -256,47 +292,6 @@ def set_footer(text):
 
 
 # =========================================================
-# REMOVE OLD KEYBOARD
-# =========================================================
-
-async def remove_old_keyboard(update: Update):
-
-    if not update.message:
-        return
-
-    try:
-
-        await update.message.reply_text(
-            "✅ Keyboard removed.\n\n"
-            "Use the Telegram Menu (☰) for bot commands.",
-            reply_markup=ReplyKeyboardRemove()
-        )
-
-    except Exception as e:
-
-        logger.error(
-            "Keyboard removal error: %s",
-            e
-        )
-
-
-# =========================================================
-# BOLD FORMAT
-# =========================================================
-
-def make_bold(text):
-
-    if not text:
-        return ""
-
-    # Escape HTML characters
-    escaped = html.escape(text)
-
-    # Make everything bold
-    return f"<b>{escaped}</b>"
-
-
-# =========================================================
 # FORMAT MOVIE POST
 # =========================================================
 
@@ -324,7 +319,7 @@ def format_post(text):
             )
 
     # -----------------------------------------------------
-    # Footer
+    # Add Footer
     # -----------------------------------------------------
 
     if footer.strip():
@@ -345,11 +340,11 @@ def format_post(text):
     # Everything Bold
     # -----------------------------------------------------
 
-    return make_bold(text)
+    return bold_text(text)
 
 
 # =========================================================
-# SEND TO ALL SOURCE CHANNELS
+# SEND MOVIE POST TO ALL CHANNELS
 # =========================================================
 
 async def send_to_all_channels(
@@ -362,7 +357,7 @@ async def send_to_all_channels(
     if not message:
         return
 
-    # Only Admin can send content to Source Channels
+    # Only Admin can send posts
     if not is_admin(update):
         return
 
@@ -370,10 +365,11 @@ async def send_to_all_channels(
 
     if not channels:
 
-        await message.reply_text(
-            "⚠️ No Source Channel added yet.\n\n"
-            "Use the Telegram Menu → Add Source Channel",
-            reply_markup=ReplyKeyboardRemove()
+        await send_bold_message(
+            message,
+            "⚠️ No Source Channel has been added yet.\n\n"
+            "Open the Telegram Menu and select "
+            "Add Source Channel."
         )
 
         return
@@ -388,10 +384,13 @@ async def send_to_all_channels(
         or ""
     )
 
-    formatted_text = format_post(original_text)
+    formatted_text = format_post(
+        original_text
+    )
 
     success = 0
     failed = 0
+
 
     # =====================================================
     # PHOTO
@@ -423,10 +422,10 @@ async def send_to_all_channels(
                 failed += 1
 
                 logger.error(
-                    "Photo send failed to %s: %s",
-                    channel,
+                    "Photo error: %s",
                     e
                 )
+
 
     # =====================================================
     # VIDEO
@@ -458,10 +457,10 @@ async def send_to_all_channels(
                 failed += 1
 
                 logger.error(
-                    "Video send failed to %s: %s",
-                    channel,
+                    "Video error: %s",
                     e
                 )
+
 
     # =====================================================
     # DOCUMENT
@@ -493,10 +492,10 @@ async def send_to_all_channels(
                 failed += 1
 
                 logger.error(
-                    "Document send failed to %s: %s",
-                    channel,
+                    "Document error: %s",
                     e
                 )
+
 
     # =====================================================
     # AUDIO
@@ -528,10 +527,10 @@ async def send_to_all_channels(
                 failed += 1
 
                 logger.error(
-                    "Audio send failed to %s: %s",
-                    channel,
+                    "Audio error: %s",
                     e
                 )
+
 
     # =====================================================
     # VOICE
@@ -563,10 +562,10 @@ async def send_to_all_channels(
                 failed += 1
 
                 logger.error(
-                    "Voice send failed to %s: %s",
-                    channel,
+                    "Voice error: %s",
                     e
                 )
+
 
     # =====================================================
     # TEXT
@@ -595,13 +594,13 @@ async def send_to_all_channels(
                 failed += 1
 
                 logger.error(
-                    "Text send failed to %s: %s",
-                    channel,
+                    "Text error: %s",
                     e
                 )
 
+
     # =====================================================
-    # OTHER CONTENT
+    # OTHER / FORWARDED CONTENT
     # =====================================================
 
     else:
@@ -623,20 +622,20 @@ async def send_to_all_channels(
                 failed += 1
 
                 logger.error(
-                    "Copy failed to %s: %s",
-                    channel,
+                    "Copy error: %s",
                     e
                 )
 
+
     # =====================================================
-    # RESULT
+    # RESULT MESSAGE - BOLD
     # =====================================================
 
-    await message.reply_text(
-        "✅ Movie post processed.\n\n"
+    await send_bold_message(
+        message,
+        "✅ Movie post processed successfully.\n\n"
         f"📤 Sent: {success}\n"
-        f"❌ Failed: {failed}",
-        reply_markup=ReplyKeyboardRemove()
+        f"❌ Failed: {failed}"
     )
 
 
@@ -652,13 +651,13 @@ async def start(
     if not await admin_only(update):
         return
 
-    # Remove any old Reply Keyboard
-    await update.message.reply_text(
+    await send_bold_message(
+        update.message,
         "🎬 Movie Update HD Bot\n\n"
         "✅ Old keyboard removed.\n\n"
         "Send your movie post here.\n\n"
-        "Use the Telegram Menu (☰) for commands.",
-        reply_markup=ReplyKeyboardRemove()
+        "The movie text/caption will be Bold.\n\n"
+        "Use the Telegram Menu (☰) for all commands."
     )
 
 
@@ -674,21 +673,21 @@ async def help_command(
     if not await admin_only(update):
         return
 
-    await update.message.reply_text(
+    await send_bold_message(
+        update.message,
         "📚 Bot Commands\n\n"
 
-        "/start - Start Bot\n"
+        "/start - Start the Bot\n"
         "/help - Help\n"
         "/addchannel - Add Source Channel\n"
         "/channels - Show Source Channels\n"
         "/removechannel - Remove Source Channel\n"
         "/setreplace - Set replacement text\n"
         "/setfooter - Set footer\n"
-        "/settings - Show settings\n\n"
+        "/settings - Show current settings\n\n"
 
-        "No Reply Keyboard is used.\n"
-        "All commands are available from Telegram Menu.",
-        reply_markup=ReplyKeyboardRemove()
+        "❌ No Reply Keyboard is used.\n"
+        "✅ Only Telegram Menu is used."
     )
 
 
@@ -706,7 +705,8 @@ async def addchannel_command(
 
     if not context.args:
 
-        await update.message.reply_text(
+        await send_bold_message(
+            update.message,
             "➕ Add Source Channel\n\n"
 
             "Use:\n"
@@ -715,8 +715,8 @@ async def addchannel_command(
             "Example:\n"
             "/addchannel @MovieSourceHD\n\n"
 
-            "First make sure the bot is Admin in that channel.",
-            reply_markup=ReplyKeyboardRemove()
+            "Make sure the Bot is Administrator "
+            "in the channel with Post Messages permission."
         )
 
         return
@@ -728,13 +728,15 @@ async def addchannel_command(
         and not channel.startswith("-100")
     ):
 
-        await update.message.reply_text(
+        await send_bold_message(
+            update.message,
             "❌ Invalid channel format.\n\n"
+
             "Use:\n"
             "@channelusername\n\n"
-            "or\n\n"
-            "-100xxxxxxxxxx",
-            reply_markup=ReplyKeyboardRemove()
+
+            "or:\n"
+            "-100xxxxxxxxxx"
         )
 
         return
@@ -743,24 +745,25 @@ async def addchannel_command(
 
     if added:
 
-        await update.message.reply_text(
-            f"✅ Source Channel added:\n\n"
-            f"{channel}\n\n"
-            "Make sure the bot is Administrator "
-            "with Post Messages permission.",
-            reply_markup=ReplyKeyboardRemove()
+        await send_bold_message(
+            update.message,
+            f"✅ Source Channel added successfully.\n\n"
+            f"📢 {channel}\n\n"
+            "Make sure the Bot is Administrator "
+            "with Post Messages permission."
         )
 
     else:
 
-        await update.message.reply_text(
-            f"⚠️ Already added:\n\n{channel}",
-            reply_markup=ReplyKeyboardRemove()
+        await send_bold_message(
+            update.message,
+            f"⚠️ This Source Channel is already added.\n\n"
+            f"📢 {channel}"
         )
 
 
 # =========================================================
-# CHANNEL LIST
+# CHANNELS
 # =========================================================
 
 async def channels_command(
@@ -775,9 +778,9 @@ async def channels_command(
 
     if not channels:
 
-        await update.message.reply_text(
-            "📭 No Source Channels added.",
-            reply_markup=ReplyKeyboardRemove()
+        await send_bold_message(
+            update.message,
+            "📭 No Source Channels have been added yet."
         )
 
         return
@@ -791,9 +794,9 @@ async def channels_command(
 
         text += f"{index}. {channel}\n"
 
-    await update.message.reply_text(
-        text,
-        reply_markup=ReplyKeyboardRemove()
+    await send_bold_message(
+        update.message,
+        text
     )
 
 
@@ -811,11 +814,11 @@ async def removechannel_command(
 
     if not context.args:
 
-        await update.message.reply_text(
+        await send_bold_message(
+            update.message,
             "🗑 Remove Source Channel\n\n"
             "Use:\n"
-            "/removechannel @yourchannel",
-            reply_markup=ReplyKeyboardRemove()
+            "/removechannel @yourchannel"
         )
 
         return
@@ -826,16 +829,18 @@ async def removechannel_command(
 
     if removed:
 
-        await update.message.reply_text(
-            f"✅ Removed:\n\n{channel}",
-            reply_markup=ReplyKeyboardRemove()
+        await send_bold_message(
+            update.message,
+            f"✅ Source Channel removed.\n\n"
+            f"📢 {channel}"
         )
 
     else:
 
-        await update.message.reply_text(
-            f"❌ Channel not found:\n\n{channel}",
-            reply_markup=ReplyKeyboardRemove()
+        await send_bold_message(
+            update.message,
+            f"❌ Source Channel not found.\n\n"
+            f"📢 {channel}"
         )
 
 
@@ -853,7 +858,8 @@ async def setreplace_command(
 
     if not context.args:
 
-        await update.message.reply_text(
+        await send_bold_message(
+            update.message,
             "✏️ Set Replace Text\n\n"
 
             "Use:\n"
@@ -862,9 +868,8 @@ async def setreplace_command(
             "Example:\n"
             "/setreplace @OldMovieChannel\n\n"
 
-            "The configured text will be replaced "
-            "with the first Source Channel.",
-            reply_markup=ReplyKeyboardRemove()
+            "This text will be replaced by "
+            "the first Source Channel."
         )
 
         return
@@ -873,10 +878,10 @@ async def setreplace_command(
 
     set_replace_text(text)
 
-    await update.message.reply_text(
-        "✅ Replacement text saved.\n\n"
-        f"Text:\n{text}",
-        reply_markup=ReplyKeyboardRemove()
+    await send_bold_message(
+        update.message,
+        "✅ Replacement text saved successfully.\n\n"
+        f"🔄 Text:\n{text}"
     )
 
 
@@ -894,12 +899,12 @@ async def setfooter_command(
 
     if not context.args:
 
-        await update.message.reply_text(
+        await send_bold_message(
+            update.message,
             "✏️ Set Footer\n\n"
 
             "Use:\n"
-            "/setfooter Your footer text here",
-            reply_markup=ReplyKeyboardRemove()
+            "/setfooter Your footer text here"
         )
 
         return
@@ -908,9 +913,9 @@ async def setfooter_command(
 
     set_footer(footer)
 
-    await update.message.reply_text(
-        "✅ Footer updated successfully.",
-        reply_markup=ReplyKeyboardRemove()
+    await send_bold_message(
+        update.message,
+        "✅ Footer updated successfully."
     )
 
 
@@ -932,13 +937,16 @@ async def settings_command(
 
     if channels:
 
-        channel_text = "\n".join(channels)
+        channel_text = "\n".join(
+            channels
+        )
 
     else:
 
         channel_text = "None"
 
-    await update.message.reply_text(
+    await send_bold_message(
+        update.message,
         "⚙️ Current Settings\n\n"
 
         "📢 Source Channels:\n"
@@ -948,8 +956,7 @@ async def settings_command(
         f"{replace_text or 'None'}\n\n"
 
         "📝 Footer:\n"
-        f"{footer or 'None'}",
-        reply_markup=ReplyKeyboardRemove()
+        f"{footer or 'None'}"
     )
 
 
@@ -1019,12 +1026,12 @@ async def setup_bot(
         ),
     ]
 
-    # Telegram command menu
+    # Set Telegram Menu Commands
     await application.bot.set_my_commands(
         commands
     )
 
-    # Native Telegram Menu Button
+    # Use native Telegram Menu button
     await application.bot.set_chat_menu_button(
         menu_button=MenuButtonCommands()
     )
@@ -1039,7 +1046,7 @@ def main():
     # Initialize database
     init_db()
 
-    # Build application
+    # Create Application
     application = (
         Application.builder()
         .token(BOT_TOKEN)
@@ -1048,7 +1055,7 @@ def main():
     )
 
     # -----------------------------------------------------
-    # COMMANDS
+    # COMMAND HANDLERS
     # -----------------------------------------------------
 
     application.add_handler(
@@ -1108,7 +1115,7 @@ def main():
     )
 
     # -----------------------------------------------------
-    # ALL NORMAL CONTENT
+    # ALL CONTENT
     #
     # Text
     # Photo
@@ -1116,7 +1123,7 @@ def main():
     # Document
     # Audio
     # Voice
-    # Forwarded Content
+    # Forwarded Messages
     #
     # No Reply Keyboard
     # -----------------------------------------------------
@@ -1128,13 +1135,13 @@ def main():
         )
     )
 
-    # Error handler
+    # Error Handler
     application.add_error_handler(
         error_handler
     )
 
     print(
-        "===================================="
+        "========================================"
     )
 
     print(
@@ -1146,14 +1153,22 @@ def main():
     )
 
     print(
+        "Bot Messages: BOLD"
+    )
+
+    print(
+        "Movie Captions: BOLD"
+    )
+
+    print(
         "Telegram Menu: ENABLED"
     )
 
     print(
-        "===================================="
+        "========================================"
     )
 
-    # Start polling
+    # Start Bot
     application.run_polling(
         allowed_updates=Update.ALL_TYPES
     )
