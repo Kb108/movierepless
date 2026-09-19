@@ -97,7 +97,10 @@ def get_settings():
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT source_url, footer, watermark, watermark_enabled
+        SELECT source_url,
+               footer,
+               watermark,
+               watermark_enabled
         FROM settings
         WHERE id = 1
     """)
@@ -237,7 +240,7 @@ def remove_channel(channel):
 
 
 # =========================================================
-# ADMIN CHECK
+# ADMIN
 # =========================================================
 
 def is_admin(update):
@@ -266,7 +269,7 @@ async def admin_only(update):
 
 
 # =========================================================
-# BOLD MESSAGE
+# BOLD REPLY
 # =========================================================
 
 async def send_bold_message(message, text):
@@ -279,7 +282,7 @@ async def send_bold_message(message, text):
 
 
 # =========================================================
-# TELEGRAM LINK REPLACEMENT
+# TELEGRAM USERNAME + URL REPLACEMENT
 # =========================================================
 
 def replace_telegram_links(text):
@@ -294,12 +297,63 @@ def replace_telegram_links(text):
     if not source_url:
         return text
 
-    pattern = re.compile(
-        r"https?://t\.me/[^\s<>()]+",
+    # -----------------------------------------------------
+    # Get source username from:
+    #
+    # https://t.me/MovieUpdateHD
+    #
+    # Result:
+    # MovieUpdateHD
+    # -----------------------------------------------------
+
+    match = re.match(
+        r"^https?://t\.me/([A-Za-z0-9_]+)",
+        source_url,
         re.IGNORECASE
     )
 
-    return pattern.sub(source_url, text)
+    if not match:
+        return text
+
+    source_username = match.group(1)
+
+    # -----------------------------------------------------
+    # STEP 1
+    #
+    # Replace Telegram URL with Telegram URL
+    #
+    # https://t.me/OldChannel
+    # ->
+    # https://t.me/MovieUpdateHD
+    #
+    # Other URLs are untouched.
+    # -----------------------------------------------------
+
+    text = re.sub(
+        r"https?://t\.me/[^\s<>()]+",
+        source_url,
+        text,
+        flags=re.IGNORECASE
+    )
+
+    # -----------------------------------------------------
+    # STEP 2
+    #
+    # Replace @username with @username
+    #
+    # @OldChannel
+    # ->
+    # @MovieUpdateHD
+    #
+    # -----------------------------------------------------
+
+    text = re.sub(
+        r"(?<![\w])@[A-Za-z0-9_]{5,32}\b",
+        "@" + source_username,
+        text
+    )
+
+    return text
 
 
 # =========================================================
@@ -318,6 +372,7 @@ def format_caption(text):
     footer = footer.strip()
 
     if footer:
+
         result += "\n\n" + footer
 
     result = html.escape(result)
@@ -332,8 +387,11 @@ def format_caption(text):
 def get_font(size):
 
     possible_fonts = [
+
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+
         "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+
     ]
 
     for font_path in possible_fonts:
@@ -349,7 +407,7 @@ def get_font(size):
 
 
 # =========================================================
-# ADD WATERMARK
+# ADD WATERMARK TO POSTER
 # =========================================================
 
 def add_watermark(image_bytes):
@@ -372,7 +430,7 @@ def add_watermark(image_bytes):
 
         width, height = image.size
 
-        # Watermark font size
+        # Watermark size based on image width
         font_size = max(
             24,
             int(width * 0.045)
@@ -382,7 +440,7 @@ def add_watermark(image_bytes):
 
         draw = ImageDraw.Draw(image)
 
-        # Calculate text size
+        # Text dimensions
         bbox = draw.textbbox(
             (0, 0),
             watermark,
@@ -392,13 +450,14 @@ def add_watermark(image_bytes):
         text_width = bbox[2] - bbox[0]
         text_height = bbox[3] - bbox[1]
 
-        # Bottom-right position
+        # Bottom-right margin
         margin = max(
             20,
             int(width * 0.025)
         )
 
         x = width - text_width - margin
+
         y = height - text_height - margin
 
         padding_x = max(
@@ -418,7 +477,7 @@ def add_watermark(image_bytes):
             y + text_height + padding_y
         )
 
-        # Black transparent background
+        # Semi-transparent black background
         draw.rounded_rectangle(
             background_box,
             radius=10,
@@ -454,6 +513,8 @@ def add_watermark(image_bytes):
             f"Watermark error: {e}"
         )
 
+        # If watermark processing fails,
+        # return original image.
         return image_bytes
 
 
@@ -476,7 +537,7 @@ async def start(update, context):
 
 ✨ <b>Features:</b>
 
-• Replace Telegram source links
+• Replace Telegram usernames & links
 • Keep movie/download URLs unchanged
 • Automatic poster watermark
 • Customize caption
@@ -641,7 +702,7 @@ async def removechannel(update, context):
 
 
 # =========================================================
-# SET SOURCE
+# SET SOURCE URL
 # =========================================================
 
 async def setsource(update, context):
@@ -786,9 +847,9 @@ async def settings(update, context):
 
     channel_list = get_channels()
 
-    text = "⚙️ <b>SETTINGS</b>\n\n"
+    text = "⚙️ SETTINGS\n\n"
 
-    text += "📢 <b>Source URL:</b>\n"
+    text += "📢 Source URL:\n"
 
     text += (
         source_url
@@ -796,7 +857,7 @@ async def settings(update, context):
         else "Not Set"
     )
 
-    text += "\n\n🖼️ <b>Watermark:</b>\n"
+    text += "\n\n🖼️ Watermark:\n"
 
     text += (
         watermark
@@ -804,7 +865,7 @@ async def settings(update, context):
         else "Not Set"
     )
 
-    text += "\n\n🔘 <b>Watermark Status:</b>\n"
+    text += "\n\n🔘 Watermark Status:\n"
 
     text += (
         "ON ✅"
@@ -812,7 +873,7 @@ async def settings(update, context):
         else "OFF ❌"
     )
 
-    text += "\n\n📝 <b>Footer:</b>\n"
+    text += "\n\n📝 Footer:\n"
 
     text += (
         footer
@@ -820,7 +881,7 @@ async def settings(update, context):
         else "Not Set"
     )
 
-    text += "\n\n📚 <b>Source Channels:</b>\n"
+    text += "\n\n📚 Source Channels:\n"
 
     if channel_list:
 
@@ -896,7 +957,7 @@ async def send_to_all_channels(
 
 
     # =====================================================
-    # PHOTO
+    # PHOTO / POSTER
     # =====================================================
 
     elif message.photo:
@@ -1197,88 +1258,57 @@ def main():
         .build()
     )
 
-
+    # -------------------------
     # Commands
+    # -------------------------
 
     application.add_handler(
-        CommandHandler(
-            "start",
-            start
-        )
+        CommandHandler("start", start)
     )
 
     application.add_handler(
-        CommandHandler(
-            "help",
-            help_command
-        )
+        CommandHandler("help", help_command)
     )
 
     application.add_handler(
-        CommandHandler(
-            "addchannel",
-            addchannel
-        )
+        CommandHandler("addchannel", addchannel)
     )
 
     application.add_handler(
-        CommandHandler(
-            "channels",
-            channels
-        )
+        CommandHandler("channels", channels)
     )
 
     application.add_handler(
-        CommandHandler(
-            "removechannel",
-            removechannel
-        )
+        CommandHandler("removechannel", removechannel)
     )
 
     application.add_handler(
-        CommandHandler(
-            "setsource",
-            setsource
-        )
+        CommandHandler("setsource", setsource)
     )
 
     application.add_handler(
-        CommandHandler(
-            "setfooter",
-            setfooter
-        )
+        CommandHandler("setfooter", setfooter)
     )
 
     application.add_handler(
-        CommandHandler(
-            "setwatermark",
-            setwatermark
-        )
+        CommandHandler("setwatermark", setwatermark)
     )
 
     application.add_handler(
-        CommandHandler(
-            "watermark_on",
-            watermark_on
-        )
+        CommandHandler("watermark_on", watermark_on)
     )
 
     application.add_handler(
-        CommandHandler(
-            "watermark_off",
-            watermark_off
-        )
+        CommandHandler("watermark_off", watermark_off)
     )
 
     application.add_handler(
-        CommandHandler(
-            "settings",
-            settings
-        )
+        CommandHandler("settings", settings)
     )
 
-
-    # All users can send posts
+    # -------------------------
+    # User Posts
+    # -------------------------
 
     application.add_handler(
         MessageHandler(
@@ -1286,7 +1316,6 @@ def main():
             send_to_all_channels
         )
     )
-
 
     print(
         "Movie Replace Bot is running..."
