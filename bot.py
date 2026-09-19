@@ -48,9 +48,9 @@ DB_FILE = "bot.db"
 
 # ---------------------------------------------------------
 # WATERMARK SIZE SCALE (1 to 100)
-# 100 মানে ছবির প্রস্থের প্রায় সমান বড় লেখা
+# 95 মানে ছবিটির প্রায় পুরো প্রস্থ জুড়ে বিশাল বড় লেখা আসবে
 # ---------------------------------------------------------
-WATERMARK_SCALE = 80 
+WATERMARK_SCALE = 95 
 
 
 # =========================================================
@@ -383,7 +383,7 @@ def get_font(size):
 
 
 # =========================================================
-# NO BACKGROUND - BOLD WHITE TEXT WITH BLACK OUTLINE
+# PURE BOLD WHITE TEXT ONLY (NO BACKGROUND / NO SHADOW)
 # =========================================================
 
 def add_watermark(image_bytes):
@@ -402,29 +402,27 @@ def add_watermark(image_bytes):
 
         image = Image.open(
             io.BytesIO(image_bytes)
-        ).convert("RGBA")
+        ).convert("RGB")
 
         width, height = image.size
 
         # -------------------------------------------------
-        # CALCULATION BASED ON WATERMARK_SCALE (1-100)
+        # HUGE FONT SIZE CALCULATION
         # -------------------------------------------------
         scale_factor = max(1, min(100, WATERMARK_SCALE)) / 100.0
         
-        # প্রাথমিক ফন্ট সাইজ গণন
-        font_size = int(width * 0.45 * scale_factor)
+        font_size = int(width * 0.50 * scale_factor)
         font = get_font(font_size)
 
         draw = ImageDraw.Draw(image)
 
-        # লেখার বাউন্ডারি সাইজ বের করা
         bbox = draw.textbbox((0, 0), watermark, font=font)
         text_width = bbox[2] - bbox[0]
         text_height = bbox[3] - bbox[1]
 
-        # সর্বোচ্চ অনুমোদিত প্রস্থ
         max_allowed_width = int(width * scale_factor)
 
+        # অটো-অ্যাডজাস্ট যাতে পিকচারের বাইরে চলে না যায়
         while text_width > max_allowed_width and font_size > 15:
             font_size -= 2
             font = get_font(font_size)
@@ -432,38 +430,33 @@ def add_watermark(image_bytes):
             text_width = bbox[2] - bbox[0]
             text_height = bbox[3] - bbox[1]
 
-        # কালো আউটলাইনের (Border/Stroke) সাইজ
-        stroke_width = max(2, int(font_size * 0.08))
-
         # -------------------------------------------------
         # RANDOM POSITIONING
         # -------------------------------------------------
-        safe_margin_x = max(10, int(width * 0.03))
-        safe_margin_y = max(10, int(height * 0.03))
+        safe_margin_x = max(5, int(width * 0.02))
+        safe_margin_y = max(5, int(height * 0.02))
 
-        max_x = max(safe_margin_x, width - text_width - stroke_width - safe_margin_x)
-        max_y = max(safe_margin_y, height - text_height - stroke_width - safe_margin_y)
+        max_x = max(safe_margin_x, width - text_width - safe_margin_x)
+        max_y = max(safe_margin_y, height - text_height - safe_margin_y)
 
         x = random.randint(safe_margin_x, max_x)
         y = random.randint(safe_margin_y, max_y)
 
         # -------------------------------------------------
-        # DRAW TEXT (WHITE WITH BLACK STROKE, NO BOX)
+        # DRAW TEXT - ONLY PURE BOLD WHITE TEXT
         # -------------------------------------------------
-        draw.text(
-            (x, y - bbox[1]),
-            watermark,
-            font=font,
-            fill=(255, 255, 255, 255),  # সাদা টেক্সট
-            stroke_width=stroke_width,
-            stroke_fill=(0, 0, 0, 255)   # কালো আউটার বর্ডার/স্ট্রোক
-        )
+        # টেক্সটটি আরও মোটা (Extra Bold) দেখানোর জন্য একাধিক পজিশনে ড্র করা
+        text_pos = (x, y - bbox[1])
+        
+        draw.text(text_pos, watermark, font=font, fill=(255, 255, 255))
+        draw.text((text_pos[0]+1, text_pos[1]), watermark, font=font, fill=(255, 255, 255))
+        draw.text((text_pos[0], text_pos[1]+1), watermark, font=font, fill=(255, 255, 255))
+        draw.text((text_pos[0]+1, text_pos[1]+1), watermark, font=font, fill=(255, 255, 255))
 
         # -------------------------------------------------
         # SAVE IMAGE
         # -------------------------------------------------
         output = io.BytesIO()
-        image = image.convert("RGB")
 
         image.save(
             output,
