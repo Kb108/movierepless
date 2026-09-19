@@ -2,8 +2,18 @@ import os
 import re
 import html
 import sqlite3
-from telegram import Update, ReplyKeyboardRemove, BotCommand, MenuButtonCommands
+import io
+
+from PIL import Image, ImageDraw, ImageFont
+
+from telegram import (
+    Update,
+    ReplyKeyboardRemove,
+    BotCommand,
+    MenuButtonCommands,
+)
 from telegram.constants import ParseMode
+
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -11,6 +21,7 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
+
 
 # =========================================================
 # CONFIG
@@ -28,7 +39,9 @@ if not ADMIN_ID_RAW:
 try:
     ADMIN_ID = int(ADMIN_ID_RAW)
 except ValueError:
-    raise ValueError("ADMIN_ID must be a numeric Telegram User ID")
+    raise ValueError(
+        "ADMIN_ID must be a numeric Telegram User ID"
+    )
 
 DB_FILE = "bot.db"
 
@@ -42,6 +55,7 @@ def db():
 
 
 def init_db():
+
     conn = db()
     cur = conn.cursor()
 
@@ -56,14 +70,17 @@ def init_db():
         CREATE TABLE IF NOT EXISTS settings (
             id INTEGER PRIMARY KEY CHECK (id = 1),
             source_url TEXT DEFAULT '',
-            footer TEXT DEFAULT ''
+            footer TEXT DEFAULT '',
+            watermark TEXT DEFAULT '@MovieUpdateHD',
+            watermark_enabled INTEGER DEFAULT 1
         )
     """)
 
     cur.execute("""
         INSERT OR IGNORE INTO settings
-        (id, source_url, footer)
-        VALUES (1, '', '')
+        (id, source_url, footer, watermark, watermark_enabled)
+        VALUES
+        (1, '', '', '@MovieUpdateHD', 1)
     """)
 
     conn.commit()
@@ -74,23 +91,29 @@ def init_db():
 # SETTINGS
 # =========================================================
 
-def get_source_url():
+def get_settings():
+
     conn = db()
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT source_url
+        SELECT source_url, footer, watermark, watermark_enabled
         FROM settings
         WHERE id = 1
     """)
 
     row = cur.fetchone()
+
     conn.close()
 
-    return row[0] if row else ""
+    if not row:
+        return "", "", "@MovieUpdateHD", 1
+
+    return row
 
 
 def set_source_url(url):
+
     conn = db()
     cur = conn.cursor()
 
@@ -104,23 +127,8 @@ def set_source_url(url):
     conn.close()
 
 
-def get_footer():
-    conn = db()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT footer
-        FROM settings
-        WHERE id = 1
-    """)
-
-    row = cur.fetchone()
-    conn.close()
-
-    return row[0] if row else ""
-
-
 def set_footer(footer):
+
     conn = db()
     cur = conn.cursor()
 
@@ -134,11 +142,42 @@ def set_footer(footer):
     conn.close()
 
 
+def set_watermark(text):
+
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE settings
+        SET watermark = ?
+        WHERE id = 1
+    """, (text,))
+
+    conn.commit()
+    conn.close()
+
+
+def set_watermark_enabled(enabled):
+
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE settings
+        SET watermark_enabled = ?
+        WHERE id = 1
+    """, (1 if enabled else 0,))
+
+    conn.commit()
+    conn.close()
+
+
 # =========================================================
 # CHANNELS
 # =========================================================
 
 def get_channels():
+
     conn = db()
     cur = conn.cursor()
 
@@ -149,32 +188,39 @@ def get_channels():
     """)
 
     rows = cur.fetchall()
+
     conn.close()
 
     return [row[0] for row in rows]
 
 
 def add_channel(channel):
+
     conn = db()
     cur = conn.cursor()
 
     try:
+
         cur.execute("""
             INSERT INTO channels (channel)
             VALUES (?)
         """, (channel,))
 
         conn.commit()
+
         result = True
 
     except sqlite3.IntegrityError:
+
         result = False
 
     conn.close()
+
     return result
 
 
 def remove_channel(channel):
+
     conn = db()
     cur = conn.cursor()
 
@@ -192,112 +238,243 @@ def remove_channel(channel):
 
 
 # =========================================================
-# ADMIN
+# ADMIN CHECK
 # =========================================================
 
-def is_admin(update: Update):
+def is_admin(update):
+
     if not update.effective_user:
         return False
 
     return update.effective_user.id == ADMIN_ID
 
 
-async def admin_only(update: Update):
+async def admin_only(update):
+
     if not is_admin(update):
+
         if update.message:
+
             await update.message.reply_text(
                 "<b>❌ This command is available only to the bot owner.</b>",
                 parse_mode=ParseMode.HTML,
                 reply_markup=ReplyKeyboardRemove()
             )
+
         return False
 
     return True
 
 
 # =========================================================
-# TEXT FORMAT
-# =========================================================
-
-def escape_bold(text):
-    if not text:
-        return ""
-
-    return html.escape(str(text))
-
-
-def replace_telegram_links(text):
-    """
-    IMPORTANT:
-    Only Telegram t.me links are replaced.
-
-    Examples replaced:
-    https://t.me/addlist/xxxxx
-    https://t.me/xxxxx
-    https://t.me/xxxxx/123
-
-    Movie/download links such as:
-    terasharefile.com
-    terabox.com
-    drive.google.com
-    mega.nz
-    etc.
-    are NOT touched.
-    """
-
-    if not text:
-        return text
-
-    source_url = get_source_url().strip()
-
-    if not source_url:
-        return text
-
-    # Telegram links only
-    telegram_pattern = re.compile(
-        r"https?://t\.me/[^\s<>()]+",
-        re.IGNORECASE
-    )
-
-    return telegram_pattern.sub(source_url, text)
-
-
-def format_caption(text):
-    if not text:
-        return ""
-
-    # First replace ONLY Telegram links
-    result = replace_telegram_links(text)
-
-    footer = get_footer().strip()
-
-    if footer:
-        result += "\n\n" + footer
-
-    # Escape HTML so user text doesn't break formatting
-    result = html.escape(result)
-
-    # Entire caption bold
-    return f"<b>{result}</b>"
-
-
-# =========================================================
-# SEND MESSAGE
+# BOLD MESSAGE
 # =========================================================
 
 async def send_bold_message(message, text):
+
     await message.reply_text(
-        f"<b>{html.escape(text)}</b>",
+        f"<b>{html.escape(str(text))}</b>",
         parse_mode=ParseMode.HTML,
         reply_markup=ReplyKeyboardRemove()
     )
 
 
 # =========================================================
+# TELEGRAM LINK REPLACEMENT
+# =========================================================
+
+def replace_telegram_links(text):
+
+    if not text:
+        return text
+
+    source_url, _, _, _ = get_settings()
+
+    source_url = source_url.strip()
+
+    if not source_url:
+        return text
+
+    # Only Telegram t.me links are detected.
+    #
+    # Examples:
+    # https://t.me/addlist/xxxxx
+    # https://t.me/username
+    # https://t.me/username/123
+    #
+    # Other URLs are NOT touched.
+
+    pattern = re.compile(
+        r"https?://t\.me/[^\s<>()]+",
+        re.IGNORECASE
+    )
+
+    return pattern.sub(source_url, text)
+
+
+# =========================================================
+# FORMAT CAPTION
+# =========================================================
+
+def format_caption(text):
+
+    if not text:
+        return ""
+
+    result = replace_telegram_links(text)
+
+    _, footer, _, _ = get_settings()
+
+    footer = footer.strip()
+
+    if footer:
+
+        result += "\n\n" + footer
+
+    result = html.escape(result)
+
+    return f"<b>{result}</b>"
+
+
+# =========================================================
+# WATERMARK FONT
+# =========================================================
+
+def get_font(size):
+
+    possible_fonts = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+    ]
+
+    for font_path in possible_fonts:
+
+        if os.path.exists(font_path):
+
+            return ImageFont.truetype(
+                font_path,
+                size
+            )
+
+    return ImageFont.load_default()
+
+
+# =========================================================
+# ADD WATERMARK TO POSTER
+# =========================================================
+
+def add_watermark(image_bytes):
+
+    source_url, footer, watermark, enabled = get_settings()
+
+    if not enabled:
+        return image_bytes
+
+    watermark = watermark.strip()
+
+    if not watermark:
+        return image_bytes
+
+    try:
+
+        image = Image.open(
+            io.BytesIO(image_bytes)
+        ).convert("RGBA")
+
+        width, height = image.size
+
+        # Watermark size according to image width
+        font_size = max(
+            24,
+            int(width * 0.045)
+        )
+
+        font = get_font(font_size)
+
+        draw = ImageDraw.Draw(image)
+
+        # Text size
+        bbox = draw.textbbox(
+            (0, 0),
+            watermark,
+            font=font
+        )
+
+        text_width = bbox[2] - bbox[0]
+        text_height = bbox[3] - bbox[1]
+
+        # Bottom-right position
+        margin = max(
+            20,
+            int(width * 0.025)
+        )
+
+        x = width - text_width - margin
+        y = height - text_height - margin
+
+        # Semi-transparent dark background
+        padding_x = max(
+            10,
+            int(width * 0.012)
+        )
+
+        padding_y = max(
+            6,
+            int(width * 0.008)
+        )
+
+        background_box = (
+            x - padding_x,
+            y - padding_y,
+            x + text_width + padding_x,
+            y + text_height + padding_y
+        )
+
+        draw.rounded_rectangle(
+            background_box,
+            radius=10,
+            fill=(0, 0, 0, 150)
+        )
+
+        # White watermark
+        draw.text(
+            (x, y),
+            watermark,
+            font=font,
+            fill=(255, 255, 255, 255)
+        )
+
+        # Save JPEG
+        output = io.BytesIO()
+
+        image = image.convert("RGB")
+
+        image.save(
+            output,
+            format="JPEG",
+            quality=95,
+            optimize=True
+        )
+
+        output.seek(0)
+
+        return output.getvalue()
+
+    except Exception as e:
+
+        print(
+            f"Watermark error: {e}"
+        )
+
+        # If watermark fails, return original
+        return image_bytes
+
+
+# =========================================================
 # START
 # =========================================================
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start(update, context):
 
     text = """
 🎬 <b>MOVIE REPLACE BOT</b>
@@ -308,14 +485,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 🎥 Send your movie post to the bot
 🤖 Our bot automatically processes it
-📢 The post is sent to your Source Channel
+📢 Automatically posts to your Source Channel
 
 ✨ <b>Features:</b>
+
 • Replace Telegram source links
-• Keep movie/download URLs unchanged
+• Keep movie URLs unchanged
+• Automatic poster watermark
 • Customize caption
-• Automatic channel posting
-• Multiple Source Channels supported
+• Multiple Source Channels
 
 📩 <b>Need this bot?</b>
 
@@ -333,27 +511,31 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # HELP
 # =========================================================
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def help_command(update, context):
 
     text = """
 <b>🎬 MOVIE REPLACE BOT</b>
 
-<b>For Users:</b>
+<b>User:</b>
 Send your movie post to the bot.
 
-<b>For Admin:</b>
+<b>Admin Commands:</b>
 
-/addchannel
-/addchannel @channelusername
+/addchannel @channel
 
 /channels
-/removechannel @channelusername
 
-/setsource
+/removechannel @channel
+
 /setsource https://t.me/YourSource
 
-/setfooter
-/setfooter Your footer text
+/setfooter Your footer
+
+/setwatermark @MovieUpdateHD
+
+/watermark_on
+
+/watermark_off
 
 /settings
 """
@@ -369,26 +551,31 @@ Send your movie post to the bot.
 # ADD CHANNEL
 # =========================================================
 
-async def addchannel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def addchannel(update, context):
 
     if not await admin_only(update):
         return
 
     if not context.args:
+
         await send_bold_message(
             update.message,
             "Usage:\n/addchannel @YourChannel"
         )
+
         return
 
     channel = context.args[0].strip()
 
     if add_channel(channel):
+
         await send_bold_message(
             update.message,
             f"✅ Source Channel added:\n{channel}"
         )
+
     else:
+
         await send_bold_message(
             update.message,
             "⚠️ This channel is already added."
@@ -396,10 +583,10 @@ async def addchannel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =========================================================
-# CHANNEL LIST
+# CHANNELS
 # =========================================================
 
-async def channels(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def channels(update, context):
 
     if not await admin_only(update):
         return
@@ -407,15 +594,21 @@ async def channels(update: Update, context: ContextTypes.DEFAULT_TYPE):
     channel_list = get_channels()
 
     if not channel_list:
+
         await send_bold_message(
             update.message,
             "❌ No Source Channel added yet."
         )
+
         return
 
     text = "📢 Source Channels:\n\n"
 
-    for index, channel in enumerate(channel_list, start=1):
+    for index, channel in enumerate(
+        channel_list,
+        start=1
+    ):
+
         text += f"{index}. {channel}\n"
 
     await send_bold_message(
@@ -428,26 +621,31 @@ async def channels(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # REMOVE CHANNEL
 # =========================================================
 
-async def removechannel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def removechannel(update, context):
 
     if not await admin_only(update):
         return
 
     if not context.args:
+
         await send_bold_message(
             update.message,
             "Usage:\n/removechannel @YourChannel"
         )
+
         return
 
     channel = context.args[0].strip()
 
     if remove_channel(channel):
+
         await send_bold_message(
             update.message,
             f"✅ Channel removed:\n{channel}"
         )
+
     else:
+
         await send_bold_message(
             update.message,
             "❌ Channel not found."
@@ -458,33 +656,40 @@ async def removechannel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # SET SOURCE URL
 # =========================================================
 
-async def setsource(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def setsource(update, context):
 
     if not await admin_only(update):
         return
 
     if not context.args:
+
         await send_bold_message(
             update.message,
             "Usage:\n/setsource https://t.me/YourSourceChannel"
         )
+
         return
 
     source_url = context.args[0].strip()
 
-    # Basic validation
-    if not re.match(r"^https?://t\.me/", source_url, re.IGNORECASE):
+    if not re.match(
+        r"^https?://t\.me/",
+        source_url,
+        re.IGNORECASE
+    ):
+
         await send_bold_message(
             update.message,
-            "❌ Please provide a valid Telegram URL.\n\nExample:\nhttps://t.me/YourSourceChannel"
+            "❌ Please enter a valid Telegram URL."
         )
+
         return
 
     set_source_url(source_url)
 
     await send_bold_message(
         update.message,
-        f"✅ Telegram Source URL saved:\n{source_url}"
+        f"✅ Source URL saved:\n{source_url}"
     )
 
 
@@ -492,16 +697,18 @@ async def setsource(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # SET FOOTER
 # =========================================================
 
-async def setfooter(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def setfooter(update, context):
 
     if not await admin_only(update):
         return
 
     if not context.args:
+
         await send_bold_message(
             update.message,
             "Usage:\n/setfooter Your footer text"
         )
+
         return
 
     footer = " ".join(context.args)
@@ -515,32 +722,116 @@ async def setfooter(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =========================================================
-# SETTINGS
+# SET WATERMARK
 # =========================================================
 
-async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def setwatermark(update, context):
 
     if not await admin_only(update):
         return
 
-    source_url = get_source_url()
-    footer = get_footer()
+    if not context.args:
+
+        await send_bold_message(
+            update.message,
+            "Usage:\n/setwatermark @MovieUpdateHD"
+        )
+
+        return
+
+    watermark = " ".join(context.args).strip()
+
+    set_watermark(watermark)
+
+    await send_bold_message(
+        update.message,
+        f"✅ Watermark changed to:\n{watermark}"
+    )
+
+
+# =========================================================
+# WATERMARK ON
+# =========================================================
+
+async def watermark_on(update, context):
+
+    if not await admin_only(update):
+        return
+
+    set_watermark_enabled(True)
+
+    await send_bold_message(
+        update.message,
+        "✅ Poster watermark is now ON."
+    )
+
+
+# =========================================================
+# WATERMARK OFF
+# =========================================================
+
+async def watermark_off(update, context):
+
+    if not await admin_only(update):
+        return
+
+    set_watermark_enabled(False)
+
+    await send_bold_message(
+        update.message,
+        "✅ Poster watermark is now OFF."
+    )
+
+
+# =========================================================
+# SETTINGS
+# =========================================================
+
+async def settings(update, context):
+
+    if not await admin_only(update):
+        return
+
+    source_url, footer, watermark, enabled = get_settings()
+
     channel_list = get_channels()
 
     text = "⚙️ SETTINGS\n\n"
 
-    text += "📢 Telegram Source URL:\n"
-    text += f"{source_url if source_url else 'Not Set'}\n\n"
+    text += "📢 Source URL:\n"
+    text += (
+        source_url
+        if source_url
+        else "Not Set"
+    )
 
-    text += "📝 Footer:\n"
-    text += f"{footer if footer else 'Not Set'}\n\n"
+    text += "\n\n🖼️ Watermark:\n"
+    text += watermark
 
-    text += "📚 Source Channels:\n"
+    text += "\n\n🔘 Watermark Status:\n"
+    text += (
+        "ON"
+        if enabled
+        else "OFF"
+    )
+
+    text += "\n\n📝 Footer:\n"
+    text += (
+        footer
+        if footer
+        else "Not Set"
+    )
+
+    text += "\n\n📚 Source Channels:\n"
 
     if channel_list:
+
         for channel in channel_list:
+
             text += f"• {channel}\n"
+
     else:
+
         text += "No channels added."
 
     await send_bold_message(
@@ -550,14 +841,17 @@ async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =========================================================
-# PROCESS USER POST
+# PROCESS POST
 # =========================================================
 
-async def send_to_all_channels(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def send_to_all_channels(
+    update,
+    context
+):
 
     # IMPORTANT:
-    # No admin check here.
-    # Everyone can send a post to the bot.
+    # No admin restriction here.
+    # Everyone can use the bot.
 
     if not update.message:
         return
@@ -565,13 +859,16 @@ async def send_to_all_channels(update: Update, context: ContextTypes.DEFAULT_TYP
     channel_list = get_channels()
 
     if not channel_list:
+
         await send_bold_message(
             update.message,
-            "⚠️ The bot is not configured yet.\nPlease contact @share_kb"
+            "⚠️ Bot is not configured yet.\nPlease contact @share_kb"
         )
+
         return
 
     message = update.message
+
 
     # =====================================================
     # TEXT
@@ -579,10 +876,14 @@ async def send_to_all_channels(update: Update, context: ContextTypes.DEFAULT_TYP
 
     if message.text:
 
-        formatted_text = format_caption(message.text)
+        formatted_text = format_caption(
+            message.text
+        )
 
         for channel in channel_list:
+
             try:
+
                 await context.bot.send_message(
                     chat_id=channel,
                     text=formatted_text,
@@ -591,27 +892,92 @@ async def send_to_all_channels(update: Update, context: ContextTypes.DEFAULT_TYP
                 )
 
             except Exception as e:
-                print(f"Channel error {channel}: {e}")
+
+                print(
+                    f"Text error {channel}: {e}"
+                )
+
 
     # =====================================================
-    # PHOTO
+    # PHOTO / MOVIE POSTER
     # =====================================================
 
     elif message.photo:
 
-        caption = format_caption(message.caption)
+        try:
 
-        for channel in channel_list:
-            try:
-                await context.bot.send_photo(
-                    chat_id=channel,
-                    photo=message.photo[-1].file_id,
-                    caption=caption if caption else None,
-                    parse_mode=ParseMode.HTML
-                )
+            # Get largest photo
+            photo = message.photo[-1]
 
-            except Exception as e:
-                print(f"Photo error {channel}: {e}")
+            telegram_file = await context.bot.get_file(
+                photo.file_id
+            )
+
+            # Download image
+            image_bytes = await telegram_file.download_as_bytearray()
+
+            # Add watermark
+            processed_image = add_watermark(
+                bytes(image_bytes)
+            )
+
+            caption = format_caption(
+                message.caption
+            )
+
+            for channel in channel_list:
+
+                try:
+
+                    photo_file = io.BytesIO(
+                        processed_image
+                    )
+
+                    photo_file.name = "movie_poster.jpg"
+
+                    await context.bot.send_photo(
+                        chat_id=channel,
+                        photo=photo_file,
+                        caption=caption if caption else None,
+                        parse_mode=ParseMode.HTML
+                    )
+
+                except Exception as e:
+
+                    print(
+                        f"Photo send error {channel}: {e}"
+                    )
+
+        except Exception as e:
+
+            print(
+                f"Poster processing error: {e}"
+            )
+
+            # Fallback:
+            # Send original photo if processing fails
+
+            caption = format_caption(
+                message.caption
+            )
+
+            for channel in channel_list:
+
+                try:
+
+                    await context.bot.send_photo(
+                        chat_id=channel,
+                        photo=message.photo[-1].file_id,
+                        caption=caption if caption else None,
+                        parse_mode=ParseMode.HTML
+                    )
+
+                except Exception as e:
+
+                    print(
+                        f"Fallback photo error {channel}: {e}"
+                    )
+
 
     # =====================================================
     # VIDEO
@@ -619,10 +985,14 @@ async def send_to_all_channels(update: Update, context: ContextTypes.DEFAULT_TYP
 
     elif message.video:
 
-        caption = format_caption(message.caption)
+        caption = format_caption(
+            message.caption
+        )
 
         for channel in channel_list:
+
             try:
+
                 await context.bot.send_video(
                     chat_id=channel,
                     video=message.video.file_id,
@@ -631,7 +1001,11 @@ async def send_to_all_channels(update: Update, context: ContextTypes.DEFAULT_TYP
                 )
 
             except Exception as e:
-                print(f"Video error {channel}: {e}")
+
+                print(
+                    f"Video error {channel}: {e}"
+                )
+
 
     # =====================================================
     # DOCUMENT
@@ -639,10 +1013,14 @@ async def send_to_all_channels(update: Update, context: ContextTypes.DEFAULT_TYP
 
     elif message.document:
 
-        caption = format_caption(message.caption)
+        caption = format_caption(
+            message.caption
+        )
 
         for channel in channel_list:
+
             try:
+
                 await context.bot.send_document(
                     chat_id=channel,
                     document=message.document.file_id,
@@ -651,7 +1029,11 @@ async def send_to_all_channels(update: Update, context: ContextTypes.DEFAULT_TYP
                 )
 
             except Exception as e:
-                print(f"Document error {channel}: {e}")
+
+                print(
+                    f"Document error {channel}: {e}"
+                )
+
 
     # =====================================================
     # AUDIO
@@ -659,10 +1041,14 @@ async def send_to_all_channels(update: Update, context: ContextTypes.DEFAULT_TYP
 
     elif message.audio:
 
-        caption = format_caption(message.caption)
+        caption = format_caption(
+            message.caption
+        )
 
         for channel in channel_list:
+
             try:
+
                 await context.bot.send_audio(
                     chat_id=channel,
                     audio=message.audio.file_id,
@@ -671,7 +1057,11 @@ async def send_to_all_channels(update: Update, context: ContextTypes.DEFAULT_TYP
                 )
 
             except Exception as e:
-                print(f"Audio error {channel}: {e}")
+
+                print(
+                    f"Audio error {channel}: {e}"
+                )
+
 
     # =====================================================
     # VOICE
@@ -680,23 +1070,31 @@ async def send_to_all_channels(update: Update, context: ContextTypes.DEFAULT_TYP
     elif message.voice:
 
         for channel in channel_list:
+
             try:
+
                 await context.bot.send_voice(
                     chat_id=channel,
                     voice=message.voice.file_id
                 )
 
             except Exception as e:
-                print(f"Voice error {channel}: {e}")
+
+                print(
+                    f"Voice error {channel}: {e}"
+                )
+
 
     # =====================================================
-    # OTHER MESSAGE TYPES
+    # OTHER TYPES
     # =====================================================
 
     else:
 
         for channel in channel_list:
+
             try:
+
                 await context.bot.copy_message(
                     chat_id=channel,
                     from_chat_id=message.chat_id,
@@ -704,10 +1102,14 @@ async def send_to_all_channels(update: Update, context: ContextTypes.DEFAULT_TYP
                 )
 
             except Exception as e:
-                print(f"Copy error {channel}: {e}")
+
+                print(
+                    f"Copy error {channel}: {e}"
+                )
+
 
     # =====================================================
-    # USER CONFIRMATION
+    # CONFIRMATION
     # =====================================================
 
     await send_bold_message(
@@ -717,23 +1119,72 @@ async def send_to_all_channels(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 # =========================================================
-# BOT COMMAND MENU
+# BOT MENU
 # =========================================================
 
 async def setup_bot(application):
 
     commands = [
-        BotCommand("start", "Start the bot"),
-        BotCommand("help", "Help"),
-        BotCommand("addchannel", "Add Source Channel"),
-        BotCommand("channels", "Show Source Channels"),
-        BotCommand("removechannel", "Remove Source Channel"),
-        BotCommand("setsource", "Set Telegram Source URL"),
-        BotCommand("setfooter", "Set Footer"),
-        BotCommand("settings", "Show Settings"),
+
+        BotCommand(
+            "start",
+            "Start the bot"
+        ),
+
+        BotCommand(
+            "help",
+            "Help"
+        ),
+
+        BotCommand(
+            "addchannel",
+            "Add Source Channel"
+        ),
+
+        BotCommand(
+            "channels",
+            "Show Source Channels"
+        ),
+
+        BotCommand(
+            "removechannel",
+            "Remove Source Channel"
+        ),
+
+        BotCommand(
+            "setsource",
+            "Set Telegram Source URL"
+        ),
+
+        BotCommand(
+            "setfooter",
+            "Set Footer"
+        ),
+
+        BotCommand(
+            "setwatermark",
+            "Set Poster Watermark"
+        ),
+
+        BotCommand(
+            "watermark_on",
+            "Turn Watermark ON"
+        ),
+
+        BotCommand(
+            "watermark_off",
+            "Turn Watermark OFF"
+        ),
+
+        BotCommand(
+            "settings",
+            "Show Settings"
+        ),
     ]
 
-    await application.bot.set_my_commands(commands)
+    await application.bot.set_my_commands(
+        commands
+    )
 
     await application.bot.set_chat_menu_button(
         menu_button=MenuButtonCommands()
@@ -755,40 +1206,91 @@ def main():
         .build()
     )
 
+
     # Commands
+
     application.add_handler(
-        CommandHandler("start", start)
+        CommandHandler(
+            "start",
+            start
+        )
     )
 
     application.add_handler(
-        CommandHandler("help", help_command)
+        CommandHandler(
+            "help",
+            help_command
+        )
     )
 
     application.add_handler(
-        CommandHandler("addchannel", addchannel)
+        CommandHandler(
+            "addchannel",
+            addchannel
+        )
     )
 
     application.add_handler(
-        CommandHandler("channels", channels)
+        CommandHandler(
+            "channels",
+            channels
+        )
     )
 
     application.add_handler(
-        CommandHandler("removechannel", removechannel)
+        CommandHandler(
+            "removechannel",
+            removechannel
+        )
     )
 
     application.add_handler(
-        CommandHandler("setsource", setsource)
+        CommandHandler(
+            "setsource",
+            setsource
+        )
     )
 
     application.add_handler(
-        CommandHandler("setfooter", setfooter)
+        CommandHandler(
+            "setfooter",
+            setfooter
+        )
     )
 
     application.add_handler(
-        CommandHandler("settings", settings)
+        CommandHandler(
+            "setwatermark",
+            setwatermark
+        )
     )
 
-    # ALL users can send posts
+    application.add_handler(
+        CommandHandler(
+            "watermark_on",
+            watermark_on
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "watermark_off",
+            watermark_off
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "settings",
+            settings
+        )
+    )
+
+
+    # =====================================================
+    # EVERYONE CAN SEND POSTS
+    # =====================================================
+
     application.add_handler(
         MessageHandler(
             filters.ALL & ~filters.COMMAND,
@@ -796,7 +1298,10 @@ def main():
         )
     )
 
-    print("Movie Replace Bot is running...")
+
+    print(
+        "Movie Replace Bot is running..."
+    )
 
     application.run_polling(
         allowed_updates=Update.ALL_TYPES
