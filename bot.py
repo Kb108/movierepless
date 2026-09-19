@@ -207,7 +207,7 @@ def add_channel(channel):
     try:
 
         cur.execute(
-            "INSERT INTO channels (channel) VALUES (?)",
+            "INSERT INTO channels (channel) VALUES (?)"
             (channel,)
         )
 
@@ -354,33 +354,30 @@ def format_caption(text):
 
 
 # =========================================================
-# FONT
+# FONT LOADER
 # =========================================================
 
 def get_font(size):
 
     possible_fonts = [
-
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-
         "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
-
+        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
+        "C:\\Windows\\Fonts\\arialbd.ttf"
     ]
 
     for font_path in possible_fonts:
-
         if os.path.exists(font_path):
-
-            return ImageFont.truetype(
-                font_path,
-                size
-            )
+            try:
+                return ImageFont.truetype(font_path, size)
+            except Exception:
+                continue
 
     return ImageFont.load_default()
 
 
 # =========================================================
-# RANDOM WATERMARK (FILMYGREM STYLE)
+# EXTRA LARGE WATERMARK (FILMYGREM EXACT STYLE)
 # =========================================================
 
 def add_watermark(image_bytes):
@@ -403,117 +400,83 @@ def add_watermark(image_bytes):
 
         width, height = image.size
 
-        # Large bold font relative to image width
-        font_size = max(
-            50,
-            int(width * 0.16)
-        )
-
+        # -------------------------------------------------
+        # EXTRA LARGE DYNAMIC FONT SIZE
+        # -------------------------------------------------
+        # ছবির প্রস্থের ৩০% ধরে বিশাল ফন্ট তৈরি করা হবে
+        font_size = int(width * 0.30)
         font = get_font(font_size)
 
         draw = ImageDraw.Draw(image)
 
-        # Get text size
-        bbox = draw.textbbox(
-            (0, 0),
-            watermark,
-            font=font
-        )
-
+        # লেখাটির প্রকৃত মাপ জানা
+        bbox = draw.textbbox((0, 0), watermark, font=font)
         text_width = bbox[2] - bbox[0]
         text_height = bbox[3] - bbox[1]
 
-        # Reduce font size if text is too wide
-        max_text_width = int(width * 0.85)
+        # লেখাটি যদি ছবির প্রস্থের চেয়ে বড় হয়ে যায়, তবে মানানসই আকারে নিয়ে আসা
+        max_allowed_width = int(width * 0.82)
 
-        if text_width > max_text_width:
-
-            ratio = max_text_width / text_width
-
-            font_size = max(
-                35,
-                int(font_size * ratio)
-            )
-
+        while text_width > max_allowed_width and font_size > 20:
+            font_size -= 4
             font = get_font(font_size)
-
-            bbox = draw.textbbox(
-                (0, 0),
-                watermark,
-                font=font
-            )
-
+            bbox = draw.textbbox((0, 0), watermark, font=font)
             text_width = bbox[2] - bbox[0]
             text_height = bbox[3] - bbox[1]
 
-        # Safe area boundaries
-        safe_margin_x = max(
-            20,
-            int(width * 0.05)
-        )
+        # -------------------------------------------------
+        # PADDING & MARGINS
+        # -------------------------------------------------
+        padding_x = int(font_size * 0.25)
+        padding_y = int(font_size * 0.15)
 
-        safe_margin_y = max(
-            20,
-            int(height * 0.05)
-        )
+        safe_margin_x = max(10, int(width * 0.02))
+        safe_margin_y = max(10, int(height * 0.02))
 
-        max_x = max(
-            safe_margin_x,
-            width - text_width - safe_margin_x - 40
-        )
+        box_width = text_width + (padding_x * 2)
+        box_height = text_height + (padding_y * 2)
 
-        max_y = max(
-            safe_margin_y,
-            height - text_height - safe_margin_y - 40
-        )
+        max_x = max(safe_margin_x, width - box_width - safe_margin_x)
+        max_y = max(safe_margin_y, height - box_height - safe_margin_y)
 
-        # Random position on image
-        x = random.randint(
-            safe_margin_x,
-            max_x
-        )
+        # -------------------------------------------------
+        # RANDOM POSITION
+        # -------------------------------------------------
+        x = random.randint(safe_margin_x, max_x)
+        y = random.randint(safe_margin_y, max_y)
 
-        y = random.randint(
-            safe_margin_y,
-            max_y
-        )
-
-        # Padding around text
-        padding_x = max(
-            20,
-            int(width * 0.03)
-        )
-
-        padding_y = max(
-            15,
-            int(height * 0.02)
-        )
-
-        # Background box coordinates
+        # -------------------------------------------------
+        # WHITE SOLID BACKGROUND BOX
+        # -------------------------------------------------
         background_box = (
-            max(0, x - padding_x),
-            max(0, y - padding_y),
-            min(width, x + text_width + padding_x),
-            min(height, y + text_height + padding_y)
+            x,
+            y,
+            x + box_width,
+            y + box_height
         )
 
-        # Draw solid white rectangle
         draw.rectangle(
             background_box,
             fill=(255, 255, 255, 255)
         )
 
-        # Draw bold black text
+        # -------------------------------------------------
+        # BOLD BLACK TEXT
+        # -------------------------------------------------
+        text_x = x + padding_x - bbox[0]
+        text_y = y + padding_y - bbox[1]
+
         draw.text(
-            (x, y - bbox[1]),
+            (text_x, text_y),
             watermark,
             font=font,
             fill=(0, 0, 0, 255)
         )
 
-        # Save output image
+        # -------------------------------------------------
+        # SAVE IMAGE
+        # -------------------------------------------------
         output = io.BytesIO()
-
         image = image.convert("RGB")
 
         image.save(
@@ -524,15 +487,10 @@ def add_watermark(image_bytes):
         )
 
         output.seek(0)
-
         return output.getvalue()
 
     except Exception as e:
-
-        print(
-            f"Watermark error: {e}"
-        )
-
+        print(f"Watermark error: {e}")
         return image_bytes
 
 
@@ -987,7 +945,7 @@ async def send_to_all_channels(
 
             image_bytes = await telegram_file.download_as_bytearray()
 
-            # Process with Filmygrem style watermark
+            # Process image with watermark
             processed_image = add_watermark(
                 bytes(image_bytes)
             )
@@ -1274,7 +1232,7 @@ def main():
         .build()
     )
 
-    # Handlers
+    # Command Handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("addchannel", addchannel))
@@ -1287,6 +1245,7 @@ def main():
     application.add_handler(CommandHandler("watermark_off", watermark_off))
     application.add_handler(CommandHandler("settings", settings))
 
+    # All non-command messages
     application.add_handler(
         MessageHandler(
             filters.ALL & ~filters.COMMAND,
