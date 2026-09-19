@@ -207,7 +207,7 @@ def add_channel(channel):
     try:
 
         cur.execute(
-            "INSERT INTO channels (channel) VALUES (?)"
+            "INSERT INTO channels (channel) VALUES (?)",
             (channel,)
         )
 
@@ -400,21 +400,17 @@ def add_watermark(image_bytes):
 
         width, height = image.size
 
-        # -------------------------------------------------
-        # EXTRA LARGE DYNAMIC FONT SIZE
-        # -------------------------------------------------
-        # ছবির প্রস্থের ৩০% ধরে বিশাল ফন্ট তৈরি করা হবে
+        # Big font size base pan image width
         font_size = int(width * 0.30)
         font = get_font(font_size)
 
         draw = ImageDraw.Draw(image)
 
-        # লেখাটির প্রকৃত মাপ জানা
+        # Check font bounding size
         bbox = draw.textbbox((0, 0), watermark, font=font)
         text_width = bbox[2] - bbox[0]
         text_height = bbox[3] - bbox[1]
 
-        # লেখাটি যদি ছবির প্রস্থের চেয়ে বড় হয়ে যায়, তবে মানানসই আকারে নিয়ে আসা
         max_allowed_width = int(width * 0.82)
 
         while text_width > max_allowed_width and font_size > 20:
@@ -424,9 +420,7 @@ def add_watermark(image_bytes):
             text_width = bbox[2] - bbox[0]
             text_height = bbox[3] - bbox[1]
 
-        # -------------------------------------------------
-        # PADDING & MARGINS
-        # -------------------------------------------------
+        # Padding & safe margins
         padding_x = int(font_size * 0.25)
         padding_y = int(font_size * 0.15)
 
@@ -439,15 +433,11 @@ def add_watermark(image_bytes):
         max_x = max(safe_margin_x, width - box_width - safe_margin_x)
         max_y = max(safe_margin_y, height - box_height - safe_margin_y)
 
-        # -------------------------------------------------
-        # RANDOM POSITION
-        # -------------------------------------------------
+        # Random position
         x = random.randint(safe_margin_x, max_x)
         y = random.randint(safe_margin_y, max_y)
 
-        # -------------------------------------------------
-        # WHITE SOLID BACKGROUND BOX
-        # -------------------------------------------------
+        # White background box
         background_box = (
             x,
             y,
@@ -460,9 +450,7 @@ def add_watermark(image_bytes):
             fill=(255, 255, 255, 255)
         )
 
-        # -------------------------------------------------
-        # BOLD BLACK TEXT
-        # -------------------------------------------------
+        # Black bold text
         text_x = x + padding_x - bbox[0]
         text_y = y + padding_y - bbox[1]
 
@@ -473,9 +461,7 @@ def add_watermark(image_bytes):
             fill=(0, 0, 0, 255)
         )
 
-        # -------------------------------------------------
-        # SAVE IMAGE
-        # -------------------------------------------------
+        # Output save
         output = io.BytesIO()
         image = image.convert("RGB")
 
@@ -1232,7 +1218,7 @@ def main():
         .build()
     )
 
-    # Command Handlers
+    # Handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("addchannel", addchannel))
@@ -1245,7 +1231,6 @@ def main():
     application.add_handler(CommandHandler("watermark_off", watermark_off))
     application.add_handler(CommandHandler("settings", settings))
 
-    # All non-command messages
     application.add_handler(
         MessageHandler(
             filters.ALL & ~filters.COMMAND,
